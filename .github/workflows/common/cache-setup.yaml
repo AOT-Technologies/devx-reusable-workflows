@@ -5,6 +5,9 @@ name: "Cache Setup - Unified Dependency & Layer Cache"
 # governance and deterministic builds. This workflow is designed to be
 # called by top-level CI orchestrators (node-ci, python-ci, maven-ci, etc).
 
+permissions:
+  contents: read
+
 on:
   workflow_call:
     inputs:
