@@ -52,7 +52,7 @@ jobs:
       - name: Cache Node modules
         if: inputs.language == 'node' || inputs.language == 'multi'
         id: node_cache
-        uses: actions/cache@v4.0.2
+        uses: actions/cache@v4
         with:
           path: |
             node_modules
@@ -69,7 +69,7 @@ jobs:
       - name: Cache Python deps
         if: inputs.language == 'python' || inputs.language == 'multi'
         id: python_cache
-        uses: actions/cache@v4.0.2
+        uses: actions/cache@v4
         with:
           path: |
             ~/.cache/pip
@@ -85,7 +85,7 @@ jobs:
       - name: Cache Maven repo
         if: inputs.language == 'maven' || inputs.language == 'multi'
         id: maven_cache
-        uses: actions/cache@v4.0.2
+        uses: actions/cache@v4
         with:
           path: ~/.m2/repository
           key: maven-${{ runner.os }}-${{ hashFiles(format('{0}/pom.xml', inputs.working_directory)) }}
@@ -102,7 +102,7 @@ jobs:
       - name: Restore Docker Buildx cache
         if: inputs.enable_docker_cache
         id: docker_cache
-        uses: actions/cache@v4.0.2
+        uses: actions/cache@v4
         with:
           path: /tmp/.buildx-cache
           key: buildx-${{ runner.os }}-${{ hashFiles(format('{0}/Dockerfile,{0}/*.dockerfile', inputs.working_directory)) }}
