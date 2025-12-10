@@ -45,6 +45,14 @@ jobs:
       docker_cache_hit:  ${{ steps.docker_cache.outputs.cache-hit }}
 
     steps:
+      # -------------------------------------------------------------
+      # CHECKOUT PROJECT (required for cache key generation)
+      # -------------------------------------------------------------
+      - name: Checkout source
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 1
+          path: ${{ inputs.working_directory }}
 
       # -------------------------------------------------------------
       # NODE.JS CACHING (npm/yarn/pnpm) — activated if language=node
