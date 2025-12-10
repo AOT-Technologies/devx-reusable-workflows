@@ -1,0 +1,7 @@
+name: Sample Node CI
+
+on: [push, pull_request]
+
+jobs:
+  ci:
+    uses: AOT/devx-reusable-workflows/.github/workflows/ci/node-ci.yaml@v1

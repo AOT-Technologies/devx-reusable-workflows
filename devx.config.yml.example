@@ -1,0 +1,6 @@
+pipeline:
+  language: node
+scans:
+  sast: true
+  sca: true
+  sbom: true

@@ -1,0 +1,21 @@
+name: "Scan Only"
+
+on:
+  workflow_call:
+    inputs:
+      working_directory:
+        required: false
+        type: string
+        default: "."
+      config_path:
+        required: false
+        type: string
+        default: "devx.config.yml"
+    secrets: {}
+
+jobs:
+  scan:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Placeholder
+        run: echo "Scan-only workflow will be implemented here."

@@ -1,0 +1,15 @@
+name: "Upload Artifacts"
+
+on:
+  workflow_call:
+    inputs:
+      paths:
+        type: string
+        required: true
+
+jobs:
+  upload:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Placeholder
+        run: echo "Upload artifacts placeholder"

@@ -1,0 +1,107 @@
+name: "Cache Setup - Unified Dependency & Layer Cache"
+
+# This reusable workflow provides consistent caching for Node, Python,
+# Maven and Docker Buildx layers. All actions are version-pinned for
+# governance and deterministic builds. This workflow is designed to be
+# called by top-level CI orchestrators (node-ci, python-ci, maven-ci, etc).
+
+on:
+  workflow_call:
+    inputs:
+      language:
+        description: "node | python | maven | docker | multi"
+        required: true
+        type: string
+      working_directory:
+        description: "Project directory for dependency files"
+        required: false
+        type: string
+        default: "."
+      enable_docker_cache:
+        description: "Enable Buildx cache (used by Docker builds)"
+        required: false
+        type: boolean
+        default: false
+    outputs:
+      node_cache_hit:    { value: "${{ jobs.cache.outputs.node_cache_hit }}" }
+      python_cache_hit:  { value: "${{ jobs.cache.outputs.python_cache_hit }}" }
+      maven_cache_hit:   { value: "${{ jobs.cache.outputs.maven_cache_hit }}" }
+      docker_cache_hit:  { value: "${{ jobs.cache.outputs.docker_cache_hit }}" }
+
+jobs:
+  cache:
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: ${{ inputs.working_directory }}
+
+    outputs:
+      node_cache_hit:    ${{ steps.node_cache.outputs.cache-hit }}
+      python_cache_hit:  ${{ steps.python_cache.outputs.cache-hit }}
+      maven_cache_hit:   ${{ steps.maven_cache.outputs.cache-hit }}
+      docker_cache_hit:  ${{ steps.docker_cache.outputs.cache-hit }}
+
+    steps:
+
+      # -------------------------------------------------------------
+      # NODE.JS CACHING (npm/yarn/pnpm) — activated if language=node
+      # -------------------------------------------------------------
+      - name: Cache Node modules
+        if: inputs.language == 'node' || inputs.language == 'multi'
+        id: node_cache
+        uses: actions/cache@v4.0.2
+        with:
+          path: |
+            node_modules
+            ~/.npm
+            ~/.cache/yarn
+            ~/.cache/pnpm
+          key: node-${{ runner.os }}-${{ hashFiles(format('{0}/package-lock.json,{0}/yarn.lock,{0}/pnpm-lock.yaml', inputs.working_directory)) }}
+          restore-keys: |
+            node-${{ runner.os }}-
+
+      # -------------------------------------------------------------
+      # PYTHON CACHING — pip/poetry
+      # -------------------------------------------------------------
+      - name: Cache Python deps
+        if: inputs.language == 'python' || inputs.language == 'multi'
+        id: python_cache
+        uses: actions/cache@v4.0.2
+        with:
+          path: |
+            ~/.cache/pip
+            ~/.cache/pypoetry
+            ${{ inputs.working_directory }}/venv
+          key: python-${{ runner.os }}-${{ hashFiles(format('{0}/requirements.txt,{0}/poetry.lock,{0}/pyproject.toml', inputs.working_directory)) }}
+          restore-keys: |
+            python-${{ runner.os }}-
+
+      # -------------------------------------------------------------
+      # MAVEN CACHING — ~/.m2/repository
+      # -------------------------------------------------------------
+      - name: Cache Maven repo
+        if: inputs.language == 'maven' || inputs.language == 'multi'
+        id: maven_cache
+        uses: actions/cache@v4.0.2
+        with:
+          path: ~/.m2/repository
+          key: maven-${{ runner.os }}-${{ hashFiles(format('{0}/pom.xml', inputs.working_directory)) }}
+          restore-keys: |
+            maven-${{ runner.os }}-
+
+      # -------------------------------------------------------------
+      # DOCKER BUILDX LAYER CACHING
+      # -------------------------------------------------------------
+      - name: Setup Docker Buildx
+        if: inputs.enable_docker_cache
+        uses: docker/setup-buildx-action@v3.7.1
+
+      - name: Restore Docker Buildx cache
+        if: inputs.enable_docker_cache
+        id: docker_cache
+        uses: actions/cache@v4.0.2
+        with:
+          path: /tmp/.buildx-cache
+          key: buildx-${{ runner.os }}-${{ hashFiles(format('{0}/Dockerfile,{0}/*.dockerfile', inputs.working_directory)) }}
+          restore-keys: |
+            buildx-${{ runner.os }}-
