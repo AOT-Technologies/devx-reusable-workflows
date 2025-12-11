@@ -8,14 +8,17 @@ permissions:
 on:
   workflow_call:
     inputs:
+
       language:
         description: "node | python | maven"
         required: true
         type: string
+
       working_directory:
         description: "Directory containing the project"
         type: string
         default: "."
+        
     outputs:
       node_cache_hit:    { value: "${{ jobs.cache.outputs.node_cache_hit }}" }
       python_cache_hit:  { value: "${{ jobs.cache.outputs.python_cache_hit }}" }
