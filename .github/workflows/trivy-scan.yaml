@@ -1,0 +1,115 @@
+name: "Module: Trivy Security Scan"
+# ------------------------------------------------------------------------------
+# Universal Policy Enforcement Point (Filesystem & Image).
+# ------------------------------------------------------------------------------
+
+on:
+  workflow_call:
+    inputs:
+      # --- MODE ---
+      scan_type:
+        description: "Scan target: 'fs' (code/deps) or 'image' (container)"
+        type: string
+        default: "image"
+
+      # --- TARGETS ---
+      scan_path:
+        description: "Path to scan (for fs mode)"
+        type: string
+        default: "."
+      image_uri:
+        description: "Full Image URI (for image mode)"
+        type: string
+        default: ""
+
+      # --- POLICY ---
+      severity_threshold:
+        description: "Severities to report (e.g., 'CRITICAL,HIGH')"
+        type: string
+        default: "CRITICAL,HIGH"
+      fail_on_vuln:
+        description: "Block pipeline if vulnerabilities are found?"
+        type: boolean
+        default: true
+      ignore_unfixed:
+        description: "Ignore vulnerabilities with no available patch?"
+        type: boolean
+        default: true
+      scanners:
+        description: "Comma-separated list of scanners (vuln,secret,misconfig,license)"
+        type: string
+        default: "vuln,secret,config"
+      
+      # --- REPORTING ---
+      output_format:
+        description: "Output format: 'table' (logs), 'sarif' (security tab), or 'json'"
+        type: string
+        default: "sarif"
+
+permissions:
+  contents: read
+  security-events: write # REQUIRED: To upload SARIF results
+
+jobs:
+  trivy-security-gate:
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout Code
+        uses: actions/checkout@v4.1.1
+
+      # ------------------------------------------------------------------------
+      # VALIDATION (Defensive Governance)
+      # ------------------------------------------------------------------------
+      - name: Validate Inputs
+        run: |
+          if [[ "${{ inputs.scan_type }}" == "image" && -z "${{ inputs.image_uri }}" ]]; then
+            echo "::error::❌ Validation Failed: 'image_uri' is required when scan_type is 'image'."
+            exit 1
+          fi
+          if [[ "${{ inputs.scan_type }}" == "fs" && -z "${{ inputs.scan_path }}" ]]; then
+             echo "::error::❌ Validation Failed: 'scan_path' is required when scan_type is 'fs'."
+             exit 1
+          fi
+
+      # ------------------------------------------------------------------------
+      # MODE 1: FILESYSTEM SCAN (Dependencies & IaC)
+      # ------------------------------------------------------------------------
+      - name: Run Trivy (FS)
+        if: inputs.scan_type == 'fs'
+        uses: aquasecurity/trivy-action@v0.20.0 # PINNED
+        with:
+          scan-type: 'fs'
+          scan-ref: ${{ inputs.scan_path }}
+          scanners: ${{ inputs.scanners }}
+          severity: ${{ inputs.severity_threshold }}
+          ignore-unfixed: ${{ inputs.ignore_unfixed }}
+          format: ${{ inputs.output_format }}
+          output: 'trivy-results.sarif'
+          exit-code: ${{ inputs.fail_on_vuln && '1' || '0' }}
+
+      # ------------------------------------------------------------------------
+      # MODE 2: IMAGE SCAN (Container OS & Packages)
+      # ------------------------------------------------------------------------
+      - name: Run Trivy (Image)
+        if: inputs.scan_type == 'image'
+        uses: aquasecurity/trivy-action@v0.20.0 # PINNED
+        with:
+          scan-type: 'image'
+          image-ref: ${{ inputs.image_uri }}
+          scanners: ${{ inputs.scanners }}
+          severity: ${{ inputs.severity_threshold }}
+          ignore-unfixed: ${{ inputs.ignore_unfixed }}
+          format: ${{ inputs.output_format }}
+          output: 'trivy-results.sarif'
+          exit-code: ${{ inputs.fail_on_vuln && '1' || '0' }}
+
+      # ------------------------------------------------------------------------
+      # REPORTING (SARIF UPLOAD)
+      # ------------------------------------------------------------------------
+      - name: Upload Results to Security Tab
+        uses: github/codeql-action/upload-sarif@v3 # PINNED
+        if: always() && inputs.output_format == 'sarif'
+        with:
+          sarif_file: 'trivy-results.sarif'
+          category: 'trivy-${{ inputs.scan_type }}'

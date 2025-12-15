@@ -1,6 +1,6 @@
 name: "Module: Python Build"
 # ------------------------------------------------------------------------------
-# Deterministic Python build with pip caching, artifact upload, null-safe outputs.
+# Deterministic Python build with pip caching, unit tests, artifact upload, null-safe outputs.
 # ------------------------------------------------------------------------------
 
 on:
@@ -17,6 +17,16 @@ on:
         description: "Command to install dependencies"
         type: string
         default: "pip install -r requirements.txt"
+      # --- TEST INPUTS ---
+      run_tests:
+        description: "Run unit tests before building?"
+        type: boolean
+        default: true
+      test_script:
+        description: "Command to run tests"
+        type: string
+        default: "python -m pytest"
+      # --- BUILD INPUTS ---
       build_command:
         description: "Command to build/package (optional, e.g., 'python -m build')"
         type: string
@@ -60,19 +70,27 @@ jobs:
           cache-dependency-path: ${{ inputs.working_directory }}/requirements.txt
 
       # ------------------------------------------------------------------------
-      # INSTALL & BUILD
+      # INSTALL & TEST
       # ------------------------------------------------------------------------
       - name: Install Dependencies
         run: |
           python -m pip install --upgrade pip
           ${{ inputs.install_command }}
 
+      # --- UNIT TESTS ---
+      - name: Run Unit Tests
+        if: inputs.run_tests == true
+        run: ${{ inputs.test_script }}
+
+      # ------------------------------------------------------------------------
+      # BUILD
+      # ------------------------------------------------------------------------
       - name: Build Application
         if: inputs.build_command != ''
         run: ${{ inputs.build_command }}
 
       # ------------------------------------------------------------------------
-      # ARTIFACT UPLOAD (AOT Standard)
+      # ARTIFACT UPLOAD
       # ------------------------------------------------------------------------
       - name: Upload Build Artifact
         if: inputs.artifact_path != ''
@@ -83,7 +101,7 @@ jobs:
           retention-days: 90
 
       # ------------------------------------------------------------------------
-      # OUTPUT HANDLING (Null Safety)
+      # OUTPUT HANDLING
       # ------------------------------------------------------------------------
       - name: Set Artifact Name Output
         id: set_artifact_name
