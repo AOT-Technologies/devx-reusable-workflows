@@ -1,0 +1,78 @@
+name: "Module: SAST Scan (Semgrep)"
+# ------------------------------------------------------------------------------
+# Static Application Security Testing (SAST) using Semgrep.
+#
+# GUARANTEES:
+# - Deterministic execution
+# - No cloud dependency
+# - Policy-driven fail-fast
+# - SARIF reporting
+#
+# POLICY GATE:
+# - fail_on_findings = true  → pipeline fails on findings
+# - fail_on_findings = false → audit mode (report only)
+# ------------------------------------------------------------------------------
+
+on:
+  workflow_call:
+    inputs:
+      scan_path:
+        description: "Path to source code"
+        type: string
+        default: "."
+      exclude_paths:
+        description: "Paths to exclude (e.g., tests/,vendor/,node_modules/)"
+        type: string
+        default: ""
+      ruleset:
+        description: "Semgrep ruleset (p/ci, p/default, p/owasp-top-ten)"
+        type: string
+        default: "p/ci"
+      severity_threshold:
+        description: "Minimum severity to report (INFO | WARNING | ERROR)"
+        type: string
+        default: "ERROR"
+      fail_on_findings:
+        description: "Fail pipeline if violations are found"
+        type: boolean
+        default: true
+      upload_sarif:
+        description: "Upload SARIF to GitHub Security tab"
+        type: boolean
+        default: true
+
+permissions:
+  contents: read
+  security-events: write
+
+jobs:
+  sast-scan:
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout Code
+        uses: actions/checkout@v4.1.1
+
+      # ------------------------------------------------------------------------
+      # EXECUTION
+      # ------------------------------------------------------------------------
+      - name: Run Semgrep SAST
+        timeout-minutes: 15
+        uses: returntocorp/semgrep-action@v1.6.0
+        with:
+          config: ${{ inputs.ruleset }}
+          paths: ${{ inputs.scan_path }}
+          exclude: ${{ inputs.exclude_paths }}
+          severity: ${{ inputs.severity_threshold }}
+          generateS arif: true
+        continue-on-error: ${{ inputs.fail_on_findings == false }}
+
+      # ------------------------------------------------------------------------
+      # REPORTING
+      # ------------------------------------------------------------------------
+      - name: Upload SARIF to Security Tab
+        if: inputs.upload_sarif == true && always()
+        uses: github/codeql-action/upload-sarif@v3
+        with:
+          sarif_file: semgrep.sarif
+          category: sast-semgrep
