@@ -36,9 +36,9 @@ on:
         type: boolean
         default: true
       scanners:
-        description: "Comma-separated list of scanners (vuln,secret,misconfig,license)"
+        description: "Comma-separated list of scanners (vuln,secret,misconfig,config,license)"
         type: string
-        default: "vuln,secret,config"
+        default: "vuln,secret,misconfig,config,license"
       
       # --- REPORTING ---
       output_format:
@@ -85,7 +85,7 @@ jobs:
           severity: ${{ inputs.severity_threshold }}
           ignore-unfixed: ${{ inputs.ignore_unfixed }}
           format: ${{ inputs.output_format }}
-          output: 'trivy-results.sarif'
+          output: 'trivy-${{ inputs.scan_type }}-results.sarif'
           exit-code: ${{ inputs.fail_on_vuln && '1' || '0' }}
 
       # ------------------------------------------------------------------------
@@ -101,7 +101,7 @@ jobs:
           severity: ${{ inputs.severity_threshold }}
           ignore-unfixed: ${{ inputs.ignore_unfixed }}
           format: ${{ inputs.output_format }}
-          output: 'trivy-results.sarif'
+          output: 'trivy-${{ inputs.scan_type }}-results.sarif'
           exit-code: ${{ inputs.fail_on_vuln && '1' || '0' }}
 
       # ------------------------------------------------------------------------
