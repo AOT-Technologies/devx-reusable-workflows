@@ -1,6 +1,6 @@
 name: "Module: Maven Build"
 # ------------------------------------------------------------------------------
-# Deterministic Maven build using your organization's standard skip-flags.
+# Deterministic Maven build with Unit Tests (run before packaging).
 # ------------------------------------------------------------------------------
 
 on:
@@ -18,20 +18,21 @@ on:
         description: "JDK Distribution"
         type: string
         default: "temurin"
-      # --- TEST INPUTS ---
+      # --- NEW: TEST INPUTS ---
       run_tests:
-        description: "Run unit tests before packaging?"
+        description: "Run unit tests?"
         type: boolean
         default: true
       test_script:
         description: "Command to run tests"
         type: string
+        # We enforce batch mode (-B) to keep logs clean
         default: "mvn test -B"
-      # --- BUILD INPUTS ---
+      # ------------------------
       maven_args:
-        description: "Maven arguments"
+        description: "Maven packaging arguments (Skips tests for speed)"
         type: string
-        # Default skips tests/checks for packaging speed, since we run tests in previous step
+        # Note: We skip tests here because we run them explicitly in the previous step
         default: "-B clean package -Dmaven.test.skip=true -Dcheckstyle.skip=true -Dpmd.skip=true -Dlicense.skip=true -Dmaven.antrun.skip=true"
       artifact_path:
         description: "Path to jar/war relative to working_directory. Leave blank to skip."
@@ -61,9 +62,6 @@ jobs:
       - name: Checkout Code
         uses: actions/checkout@v4.1.1
 
-      # ------------------------------------------------------------------------
-      # SETUP & CACHE
-      # ------------------------------------------------------------------------
       - name: Setup Java
         uses: actions/setup-java@v4.2.1
         with:
@@ -72,24 +70,15 @@ jobs:
           cache: 'maven'
           cache-dependency-path: ${{ inputs.working_directory }}/pom.xml
 
-      # ------------------------------------------------------------------------
-      # TEST
-      # ------------------------------------------------------------------------
+      # --- UNIT TEST STEP ---
       - name: Run Unit Tests
         if: inputs.run_tests == true
-        # We explicitly run tests here. 
-        # The main build command below will likely skip them to save time.
+        # We run this BEFORE packaging to catch errors early
         run: ${{ inputs.test_script }} -f pom.xml
 
-      # ------------------------------------------------------------------------
-      # BUILD
-      # ------------------------------------------------------------------------
       - name: Build with Maven
         run: mvn ${{ inputs.maven_args }} -f pom.xml
 
-      # ------------------------------------------------------------------------
-      # ARTIFACT UPLOAD
-      # ------------------------------------------------------------------------
       - name: Upload Build Artifact
         if: inputs.artifact_path != ''
         uses: actions/upload-artifact@v4.3.1
@@ -98,9 +87,6 @@ jobs:
           path: ${{ inputs.working_directory }}/${{ inputs.artifact_path }}
           retention-days: 90
 
-      # ------------------------------------------------------------------------
-      # OUTPUT HANDLING
-      # ------------------------------------------------------------------------
       - name: Set Artifact Name Output
         id: set_artifact_name
         run: |

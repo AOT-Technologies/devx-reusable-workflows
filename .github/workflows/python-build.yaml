@@ -1,6 +1,6 @@
 name: "Module: Python Build"
 # ------------------------------------------------------------------------------
-# Deterministic Python build with pip caching, unit tests, artifact upload, null-safe outputs.
+# Deterministic Python build with pip caching, unit tests, artifact upload.
 # ------------------------------------------------------------------------------
 
 on:
@@ -17,22 +17,22 @@ on:
         description: "Command to install dependencies"
         type: string
         default: "pip install -r requirements.txt"
-      # --- TEST INPUTS ---
+      # --- NEW: TEST INPUTS ---
       run_tests:
-        description: "Run unit tests before building?"
+        description: "Run unit tests?"
         type: boolean
         default: true
       test_script:
-        description: "Command to run tests"
+        description: "Script to run tests"
         type: string
         default: "python -m pytest"
-      # --- BUILD INPUTS ---
+      # ------------------------
       build_command:
-        description: "Command to build/package (optional, e.g., 'python -m build')"
+        description: "Command to build/package (optional)"
         type: string
         default: ""
       artifact_path:
-        description: "Directory/File (relative to working_directory) to upload. Leave blank to skip."
+        description: "Directory/File to upload. Leave blank to skip."
         type: string
         default: ""
 
@@ -70,14 +70,14 @@ jobs:
           cache-dependency-path: ${{ inputs.working_directory }}/requirements.txt
 
       # ------------------------------------------------------------------------
-      # INSTALL & TEST
+      # INSTALL
       # ------------------------------------------------------------------------
       - name: Install Dependencies
         run: |
           python -m pip install --upgrade pip
           ${{ inputs.install_command }}
 
-      # --- UNIT TESTS ---
+      # --- UNIT TEST STEP ---
       - name: Run Unit Tests
         if: inputs.run_tests == true
         run: ${{ inputs.test_script }}
@@ -100,9 +100,6 @@ jobs:
           path: ${{ inputs.working_directory }}/${{ inputs.artifact_path }}
           retention-days: 90
 
-      # ------------------------------------------------------------------------
-      # OUTPUT HANDLING
-      # ------------------------------------------------------------------------
       - name: Set Artifact Name Output
         id: set_artifact_name
         run: |

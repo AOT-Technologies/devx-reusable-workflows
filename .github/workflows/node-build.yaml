@@ -1,6 +1,6 @@
 name: "Module: Node Build"
 # ------------------------------------------------------------------------------
-# Deterministic Node.js build with caching, unit tests, artifact upload, null-safe outputs.
+# Deterministic Node.js build with caching, unit tests, artifact upload.
 # ------------------------------------------------------------------------------
 
 on:
@@ -12,16 +12,16 @@ on:
       node_version:
         type: string
         default: "20"
-      # --- TEST INPUTS ---
+      # --- NEW: TEST INPUTS ---
       run_tests:
-        description: "Run unit tests before building?"
+        description: "Run unit tests?"
         type: boolean
         default: true
       test_script:
-        description: "Command to run tests"
+        description: "Script to run tests"
         type: string
         default: "npm test"
-      # --- BUILD INPUTS ---
+      # ------------------------
       build_script:
         type: string
         default: "npm run build"
@@ -60,7 +60,7 @@ jobs:
       - name: Install Dependencies
         run: npm ci --prefer-offline --no-audit
 
-      # --- UNIT TESTS ---
+      # --- UNIT TEST STEP ---
       - name: Run Unit Tests
         if: inputs.run_tests == true
         run: ${{ inputs.test_script }}
