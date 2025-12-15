@@ -1,0 +1,71 @@
+name: "Module: Node Build"
+# ------------------------------------------------------------------------------
+# Deterministic Node.js build with caching, artifact upload, null-safe outputs.
+# ------------------------------------------------------------------------------
+
+on:
+  workflow_call:
+    inputs:
+      working_directory:
+        type: string
+        default: "."
+      node_version:
+        type: string
+        default: "20"
+      build_script:
+        type: string
+        default: "npm run build"
+      artifact_path:
+        type: string
+        default: ""
+    outputs:
+      artifact_name:
+        description: "Name of uploaded artifact (empty if no upload)"
+        value: ${{ jobs.build.outputs.artifact_name }}
+
+permissions:
+  contents: read
+  actions: write        # Required for upload-artifact
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: ${{ inputs.working_directory }}
+    outputs:
+      artifact_name: ${{ steps.set_artifact_name.outputs.artifact_name }}
+    steps:
+
+      - name: Checkout Code
+        uses: actions/checkout@v4.1.1
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v4.0.2
+        with:
+          node-version: ${{ inputs.node_version }}
+          cache: npm
+          cache-dependency-path: ${{ inputs.working_directory }}/package-lock.json
+
+      - name: Install Dependencies
+        run: npm ci --prefer-offline --no-audit
+
+      - name: Build Application
+        run: ${{ inputs.build_script }}
+
+      - name: Upload Build Artifact
+        if: inputs.artifact_path != ''
+        uses: actions/upload-artifact@v4.3.1
+        with:
+          name: node-build-${{ github.sha }}
+          path: ${{ inputs.working_directory }}/${{ inputs.artifact_path }}
+          retention-days: 90
+
+      - name: Set Artifact Name Output
+        id: set_artifact_name
+        run: |
+          if [[ -n "${{ inputs.artifact_path }}" ]]; then
+            echo "artifact_name=node-build-${{ github.sha }}" >> $GITHUB_OUTPUT
+          else
+            echo "artifact_name=" >> $GITHUB_OUTPUT
+          fi

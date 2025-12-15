@@ -1,0 +1,213 @@
+name: "Module: Docker Build & Push (Universal)"
+# ------------------------------------------------------------------------------
+# UNIVERSAL Docker build module.
+#
+# MODES:
+# 1. 'ecr': Uses AWS OIDC (No keys). Requires 'role_to_assume'.
+# 2. 'generic': Uses Username/Password. Works with Docker Hub, GHCR, Artifactory.
+# ------------------------------------------------------------------------------
+
+on:
+  workflow_call:
+    inputs:
+      # --- GENERAL INPUTS ---
+      working_directory:
+        description: "Directory containing the Dockerfile"
+        type: string
+        default: "."
+      dockerfile:
+        description: "Name of the Dockerfile"
+        type: string
+        default: "Dockerfile"
+      image_name:
+        description: "Image name (e.g., 'my-app' or 'org/my-app')"
+        required: true
+        type: string
+      image_tag:
+        description: "Tag to apply (defaults to git short SHA)"
+        type: string
+        default: "" 
+
+      # --- REGISTRY STRATEGY ---
+      registry_type:
+        description: "Type of registry: 'ecr' or 'generic'"
+        type: string
+        default: "ecr"
+      
+      # --- MODE: GENERIC (Docker Hub, GHCR, Artifactory) ---
+      registry_url:
+        description: "URL of the registry (e.g., 'docker.io', 'ghcr.io'). Required for 'generic'."
+        type: string
+        default: ""
+      
+      # --- MODE: AWS ECR ---
+      aws_region:
+        description: "AWS Region (Required for 'ecr')"
+        type: string
+        default: "us-east-1"
+      role_to_assume:
+        description: "IAM Role ARN (Required for 'ecr')"
+        type: string
+        default: ""
+
+      # --- BUILD OPTIONS ---
+      build_args:
+        description: "Build args in KEY=VALUE format, one per line (optional)"
+        type: string
+        default: ""
+      platforms:
+        description: "Target platforms (e.g., 'linux/amd64,linux/arm64'). Defaults to linux/amd64."
+        type: string
+        default: "linux/amd64"
+
+    secrets:
+      # Secrets are only needed for 'generic' mode
+      registry_username:
+        description: "Username for Generic Registry"
+        required: false
+      registry_password:
+        description: "Password/Token for Generic Registry"
+        required: false
+
+    outputs:
+      image_uri:
+        description: "Full URI of the pushed image"
+        value: ${{ jobs.build-push.outputs.image_uri }}
+
+permissions:
+  id-token: write       # REQUIRED: For OIDC (ECR)
+  contents: read        # REQUIRED: To checkout code
+  actions: write        # REQUIRED: To write cache
+  packages: write       # REQUIRED: If pushing to GHCR
+
+jobs:
+  build-push:
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: ${{ inputs.working_directory }}
+
+    outputs:
+      image_uri: ${{ steps.set_output.outputs.image_uri }}
+
+    steps:
+      - name: Checkout Code
+        uses: actions/checkout@v4.1.1
+
+      # ------------------------------------------------------------------------
+      # INPUT VALIDATION
+      # ------------------------------------------------------------------------
+      - name: Validate Inputs
+        run: |
+          # Validate ECR mode requirements
+          if [[ "${{ inputs.registry_type }}" == "ecr" ]]; then
+            if [[ -z "${{ inputs.role_to_assume }}" ]]; then
+              echo "❌ ERROR: 'role_to_assume' is required when registry_type is 'ecr'"
+              exit 1
+            fi
+          fi
+          
+          # Validate Generic mode requirements
+          if [[ "${{ inputs.registry_type }}" == "generic" ]]; then
+            if [[ -z "${{ inputs.registry_url }}" ]]; then
+              echo "❌ ERROR: 'registry_url' is required when registry_type is 'generic'"
+              exit 1
+            fi
+            if [[ -z "${{ secrets.registry_username }}" ]] || [[ -z "${{ secrets.registry_password }}" ]]; then
+              echo "❌ ERROR: 'registry_username' and 'registry_password' secrets are required for generic mode"
+              exit 1
+            fi
+          fi
+          
+          # Validate registry_type value
+          if [[ "${{ inputs.registry_type }}" != "ecr" ]] && [[ "${{ inputs.registry_type }}" != "generic" ]]; then
+            echo "❌ ERROR: registry_type must be either 'ecr' or 'generic', got: '${{ inputs.registry_type }}'"
+            exit 1
+          fi
+          
+          echo "✅ Input validation passed"
+
+      # ------------------------------------------------------------------------
+      # STRATEGY A: AWS ECR (OIDC)
+      # ------------------------------------------------------------------------
+      - name: Configure AWS Credentials
+        if: inputs.registry_type == 'ecr'
+        uses: aws-actions/configure-aws-credentials@v4.0.2
+        with:
+          role-to-assume: ${{ inputs.role_to_assume }}
+          aws-region: ${{ inputs.aws_region }}
+
+      - name: Login to Amazon ECR
+        if: inputs.registry_type == 'ecr'
+        id: login-ecr
+        uses: aws-actions/amazon-ecr-login@v2.0.1
+
+      # ------------------------------------------------------------------------
+      # STRATEGY B: GENERIC (Docker Hub / GHCR / Artifactory)
+      # ------------------------------------------------------------------------
+      - name: Login to Generic Registry
+        if: inputs.registry_type == 'generic'
+        id: login-generic
+        uses: docker/login-action@v3.0.0
+        with:
+          registry: ${{ inputs.registry_url }}
+          username: ${{ secrets.registry_username }}
+          password: ${{ secrets.registry_password }}
+
+      # ------------------------------------------------------------------------
+      # SHARED: SETUP BUILDX
+      # ------------------------------------------------------------------------
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@v3.0.0
+
+      - name: Calculate Metadata
+        id: meta
+        run: |
+          # 1. Determine Tag
+          if [[ -n "${{ inputs.image_tag }}" ]]; then
+            TAG="${{ inputs.image_tag }}"
+          else
+            TAG=$(git rev-parse --short HEAD)
+          fi
+          
+          # 2. Determine Registry Base URL
+          if [[ "${{ inputs.registry_type }}" == "ecr" ]]; then
+            REGISTRY="${{ steps.login-ecr.outputs.registry }}"
+          else
+            REGISTRY="${{ inputs.registry_url }}"
+          fi
+          
+          # 3. Construct Full URI
+          # Handle Docker Hub edge case where registry_url might be empty or 'docker.io'
+          if [[ "$REGISTRY" == "docker.io" ]] || [[ -z "$REGISTRY" ]]; then
+             FULL_URI="${{ inputs.image_name }}:$TAG"
+          else
+             FULL_URI="$REGISTRY/${{ inputs.image_name }}:$TAG"
+          fi
+          
+          echo "tag=$TAG" >> $GITHUB_OUTPUT
+          echo "full_uri=$FULL_URI" >> $GITHUB_OUTPUT
+
+      # ------------------------------------------------------------------------
+      # SHARED: BUILD & PUSH
+      # ------------------------------------------------------------------------
+      - name: Build and Push
+        uses: docker/build-push-action@v5.1.0
+        with:
+          context: ${{ inputs.working_directory }}
+          file: ${{ inputs.working_directory }}/${{ inputs.dockerfile }}
+          push: true
+          tags: ${{ steps.meta.outputs.full_uri }}
+          platforms: ${{ inputs.platforms }}
+          build-args: ${{ inputs.build_args }}
+          # Standard GHA Caching
+          cache-from: type=gha
+          cache-to: type=gha,mode=max
+          provenance: false
+
+      # ------------------------------------------------------------------------
+      # OUTPUT
+      # ------------------------------------------------------------------------
+      - name: Set Output
+        id: set_output
+        run: echo "image_uri=${{ steps.meta.outputs.full_uri }}" >> $GITHUB_OUTPUT

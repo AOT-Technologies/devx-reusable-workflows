@@ -1,0 +1,91 @@
+name: "Module: Maven Build"
+# ------------------------------------------------------------------------------
+# Deterministic Maven build using your organization's standard skip-flags.
+# ------------------------------------------------------------------------------
+
+on:
+  workflow_call:
+    inputs:
+      working_directory:
+        description: "Directory containing pom.xml"
+        type: string
+        default: "."
+      java_version:
+        description: "Java version"
+        type: string
+        default: "8"
+      distribution:
+        description: "JDK Distribution"
+        type: string
+        default: "temurin"
+      maven_args:
+        description: "Maven arguments"
+        type: string
+        default: "-B clean package -Dmaven.test.skip=true -Dcheckstyle.skip=true -Dpmd.skip=true -Dlicense.skip=true -Dmaven.antrun.skip=true"
+      artifact_path:
+        description: "Path to jar/war relative to working_directory. Leave blank to skip."
+        type: string
+        default: ""
+
+    outputs:
+      artifact_name:
+        description: "Name of uploaded artifact (empty if no upload)"
+        value: ${{ jobs.build.outputs.artifact_name }}
+
+permissions:
+  contents: read
+  actions: write        # Required for upload-artifact
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: ${{ inputs.working_directory }}
+    
+    outputs:
+      artifact_name: ${{ steps.set_artifact_name.outputs.artifact_name }}
+
+    steps:
+      - name: Checkout Code
+        uses: actions/checkout@v4.1.1
+
+      # ------------------------------------------------------------------------
+      # SETUP & CACHE
+      # ------------------------------------------------------------------------
+      - name: Setup Java
+        uses: actions/setup-java@v4.2.1
+        with:
+          java-version: ${{ inputs.java_version }}
+          distribution: ${{ inputs.distribution }}
+          cache: 'maven'
+          cache-dependency-path: ${{ inputs.working_directory }}/pom.xml
+
+      # ------------------------------------------------------------------------
+      # BUILD
+      # ------------------------------------------------------------------------
+      - name: Build with Maven
+        run: mvn ${{ inputs.maven_args }} -f pom.xml
+
+      # ------------------------------------------------------------------------
+      # ARTIFACT UPLOAD
+      # ------------------------------------------------------------------------
+      - name: Upload Build Artifact
+        if: inputs.artifact_path != ''
+        uses: actions/upload-artifact@v4.3.1
+        with:
+          name: maven-build-${{ github.sha }}
+          path: ${{ inputs.working_directory }}/${{ inputs.artifact_path }}
+          retention-days: 90
+
+      # ------------------------------------------------------------------------
+      # OUTPUT HANDLING (Null Safety)
+      # ------------------------------------------------------------------------
+      - name: Set Artifact Name Output
+        id: set_artifact_name
+        run: |
+          if [[ -n "${{ inputs.artifact_path }}" ]]; then
+            echo "artifact_name=maven-build-${{ github.sha }}" >> $GITHUB_OUTPUT
+          else
+            echo "artifact_name=" >> $GITHUB_OUTPUT
+          fi
