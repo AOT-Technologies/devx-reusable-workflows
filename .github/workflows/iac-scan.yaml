@@ -1,0 +1,91 @@
+name: "Module: IaC Scan (Checkov)"
+# ------------------------------------------------------------------------------
+# Infrastructure as Code Security Scanning using Checkov.
+#
+# TARGETS:
+# - Terraform
+# - CloudFormation
+# - Kubernetes
+# - Helm
+# - ARM
+# - Serverless
+#
+# FEATURES:
+# - Graph-based analysis
+# - Soft-fail (audit mode) support
+# - SARIF reporting to GitHub Security tab
+# ------------------------------------------------------------------------------
+
+on:
+  workflow_call:
+    inputs:
+      working_directory:
+        description: "Root directory to scan (recursive)"
+        type: string
+        default: "."
+      
+      quiet_output:
+        description: "Suppress detailed console output"
+        type: boolean
+        default: true
+
+      # --- POLICY ---
+      soft_fail:
+        description: "Audit mode. If true, do not fail pipeline on violations."
+        type: boolean
+        default: false
+
+      skip_check:
+        description: "Comma-separated list of Checkov IDs to skip (e.g., CKV_AWS_1,CKV_K8S_2)"
+        type: string
+        default: ""
+
+      frameworks:
+        description: "Frameworks to scan (terraform,kubernetes,cloudformation,arm,serverless). Leave empty for auto-detect."
+        type: string
+        default: ""
+
+      # --- REPORTING ---
+      upload_sarif:
+        description: "Upload SARIF results to GitHub Security tab"
+        type: boolean
+        default: true
+
+permissions:
+  contents: read
+  security-events: write
+
+jobs:
+  iac-scan:
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout Code
+        uses: actions/checkout@v4.1.1
+
+      # ------------------------------------------------------------------------
+      # EXECUTION (Checkov)
+      # ------------------------------------------------------------------------
+      - name: Run Checkov IaC Scan
+        timeout-minutes: 15
+        id: checkov
+        uses: bridgecrewio/checkov-action@v12.2618.0 # PINNED
+        with:
+          directory: ${{ inputs.working_directory }}
+          skip_check: ${{ inputs.skip_check }}
+          framework: ${{ inputs.frameworks }}
+          soft_fail: ${{ inputs.soft_fail }}
+          quiet: ${{ inputs.quiet_output }}
+          output_format: cli,sarif
+          output_file_path: console,checkov.sarif
+          download_external_modules: true
+
+      # ------------------------------------------------------------------------
+      # REPORTING
+      # ------------------------------------------------------------------------
+      - name: Upload SARIF to Security Tab
+        if: inputs.upload_sarif == true && always()
+        uses: github/codeql-action/upload-sarif@v3
+        with:
+          sarif_file: checkov.sarif
+          category: iac-checkov
