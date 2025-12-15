@@ -1,7 +1,123 @@
-name: Sample Node CI
+name: Node.js CI Pipeline
 
-on: [push, pull_request]
+# This is a complete example showing how to use DevX reusable workflows
+# for a Node.js application with full security scanning and Docker deployment
+
+on:
+  push:
+    branches: [main, develop]
+  pull_request:
+    branches: [main]
+
+# Required for ECR OIDC authentication
+permissions:
+  id-token: write
+  contents: read
+  security-events: write
+  packages: write
 
 jobs:
-  ci:
-    uses: AOT/devx-reusable-workflows/.github/workflows/ci/node-ci.yaml@v1
+  # ============================================================================
+  # STAGE 1: BUILD & TEST
+  # ============================================================================
+  build-and-test:
+    name: Build & Unit Test
+    uses: AOT-Technologies/devx-reusable-workflows/.github/workflows/node-build.yaml@main
+    with:
+      working_directory: .
+      node_version: "20"
+      run_tests: true
+      test_script: "npm test"
+      build_script: "npm run build"
+      artifact_path: "dist/"
+
+  # ============================================================================
+  # STAGE 2: SECURITY SCANS (Run in parallel)
+  # ============================================================================
+  
+  # SAST: Static Application Security Testing
+  sast-scan:
+    name: SAST Scan (Semgrep)
+    uses: AOT-Technologies/devx-reusable-workflows/.github/workflows/sast-scan.yaml@main
+    with:
+      scan_path: ./src
+      exclude_paths: "node_modules/,dist/,tests/,coverage/"
+      ruleset: p/ci
+      severity_threshold: ERROR
+      fail_on_findings: true
+      upload_sarif: true
+
+  # Filesystem vulnerability scan
+  trivy-fs-scan:
+    name: Trivy Filesystem Scan
+    uses: AOT-Technologies/devx-reusable-workflows/.github/workflows/trivy-scan.yaml@main
+    with:
+      scan_type: fs
+      scan_path: .
+      severity_threshold: "CRITICAL,HIGH"
+      fail_on_vuln: true
+      ignore_unfixed: true
+      scanners: "vuln,secret,config"
+
+  # ============================================================================
+  # STAGE 3: DOCKER BUILD (Only on main branch)
+  # ============================================================================
+  docker-build:
+    name: Build Docker Image
+    if: github.ref == 'refs/heads/main'
+    needs: [build-and-test, sast-scan, trivy-fs-scan]
+    uses: AOT-Technologies/devx-reusable-workflows/.github/workflows/docker-build.yaml@main
+    with:
+      working_directory: .
+      dockerfile: Dockerfile
+      image_name: sample-node-app
+      image_tag: ${{ github.sha }}
+      registry_type: ecr
+      aws_region: us-east-1
+      role_to_assume: arn:aws:iam::123456789012:role/GitHubActionsECRRole
+      platforms: linux/amd64
+      build_args: |
+        NODE_ENV=production
+        VERSION=${{ github.sha }}
+        BUILD_DATE=${{ github.event.head_commit.timestamp }}
+
+  # ============================================================================
+  # STAGE 4: CONTAINER SECURITY SCAN
+  # ============================================================================
+  trivy-image-scan:
+    name: Trivy Image Scan
+    if: github.ref == 'refs/heads/main'
+    needs: docker-build
+    uses: AOT-Technologies/devx-reusable-workflows/.github/workflows/trivy-scan.yaml@main
+    with:
+      scan_type: image
+      image_uri: ${{ needs.docker-build.outputs.image_uri }}
+      severity_threshold: "CRITICAL,HIGH"
+      fail_on_vuln: true
+      ignore_unfixed: true
+      scanners: "vuln,secret"
+      output_format: sarif
+
+  # ============================================================================
+  # STAGE 5: SBOM GENERATION
+  # ============================================================================
+  generate-sbom:
+    name: Generate SBOM
+    if: github.ref == 'refs/heads/main'
+    needs: docker-build
+    uses: AOT-Technologies/devx-reusable-workflows/.github/workflows/sbom-gen.yaml@main
+    with:
+      image: ${{ needs.docker-build.outputs.image_uri }}
+      format: cyclonedx-json
+
+  # ============================================================================
+  # STAGE 6: DEPLOYMENT (Placeholder - Add your deployment logic)
+  # ============================================================================
+  # deploy:
+  #   name: Deploy to Environment
+  #   if: github.ref == 'refs/heads/main'
+  #   needs: [trivy-image-scan, generate-sbom]
+  #   runs-on: ubuntu-latest
+  #   steps:
+  #     - name: Deploy
+  #       run: echo "Add your deployment steps here"
