@@ -1,0 +1,145 @@
+name: "Module: SBOM Vulnerability Scan (Grype)"
+# ------------------------------------------------------------------------------
+# Vulnerability analysis based on existing SBOMs.
+#
+# PURPOSE:
+# - Post-build / post-release analysis
+# - Incident response (retroactive scanning)
+# - Compliance & audit support
+#
+# GUARANTEES:
+# - NEVER fails the pipeline (Report Only)
+# - Supports scanning Artifacts from previous jobs
+# ------------------------------------------------------------------------------
+
+on:
+  workflow_call:
+    inputs:
+      # --- TARGET ---
+      sbom_path:
+        description: "Path to SBOM file (if local in repo)"
+        type: string
+        default: ""
+      
+      sbom_artifact_name:
+        description: "Artifact name to download (if SBOM is from previous job)"
+        type: string
+        default: ""
+
+      # --- POLICY (Reporting Only) ---
+      severity_threshold:
+        description: "Severities to report (negligible,low,medium,high,critical)"
+        type: string
+        default: "medium"
+
+      # --- OUTPUT ---
+      output_format:
+        description: "Output format (table, json, sarif)"
+        type: string
+        default: "sarif"
+
+      upload_sarif:
+        description: "Upload SARIF to GitHub Security tab"
+        type: boolean
+        default: true
+
+      upload_artifact:
+        description: "Upload scan report as artifact"
+        type: boolean
+        default: true
+
+    outputs:
+      scan_report_artifact:
+        description: "Name of the uploaded scan report artifact"
+        value: ${{ jobs.sbom-scan.outputs.report_name }}
+
+permissions:
+  contents: read
+  security-events: write
+  actions: write
+
+jobs:
+  sbom-scan:
+    runs-on: ubuntu-latest
+    # HARD GUARANTEE: This job will never turn the pipeline red.
+    continue-on-error: true
+
+    outputs:
+      report_name: ${{ steps.set_output.outputs.report_name }}
+
+    steps:
+      - name: Checkout Code
+        uses: actions/checkout@v4.1.1
+
+      # ------------------------------------------------------------------------
+      # ARTIFACT RETRIEVAL
+      # ------------------------------------------------------------------------
+      - name: Download SBOM Artifact
+        if: inputs.sbom_artifact_name != ''
+        uses: actions/download-artifact@v4
+        with:
+          name: ${{ inputs.sbom_artifact_name }}
+
+      # ------------------------------------------------------------------------
+      # VALIDATION & DISCOVERY
+      # ------------------------------------------------------------------------
+      - name: Locate SBOM File
+        run: |
+          # 1. Start with the explicit path input
+          SBOM_FILE="${{ inputs.sbom_path }}"
+          
+          # 2. If no path, but artifact was downloaded, look for a JSON file
+          if [[ -z "$SBOM_FILE" && -n "${{ inputs.sbom_artifact_name }}" ]]; then
+            SBOM_FILE=$(find . -name "*.json" -type f | head -n 1)
+          fi
+          
+          # 3. Final Validation
+          if [[ ! -f "$SBOM_FILE" ]]; then
+            echo "::error::❌ SBOM file not found. Ensure 'sbom_path' is set or 'sbom_artifact_name' was downloaded correctly."
+            exit 1
+          fi
+          
+          echo "SBOM_FILE=$SBOM_FILE" >> $GITHUB_ENV
+
+      # ------------------------------------------------------------------------
+      # EXECUTION (Grype CLI)
+      # ------------------------------------------------------------------------
+      - name: Install Grype
+        run: |
+          curl -sSfL https://raw.githubusercontent.com/anchore/grype/main/install.sh | sh -s -- -b /usr/local/bin
+
+      - name: Run Grype Analysis
+        timeout-minutes: 10
+        run: |
+          grype sbom:${{ env.SBOM_FILE }} \
+            --fail-on ${{ inputs.severity_threshold }} \
+            --output ${{ inputs.output_format }} \
+            --file grype-results.${{ inputs.output_format }} \
+            || true # Ensure we don't crash the step, job-level continue-on-error handles the rest
+
+      # ------------------------------------------------------------------------
+      # REPORTING
+      # ------------------------------------------------------------------------
+      - name: Upload SARIF to Security Tab
+        if: inputs.upload_sarif == true && inputs.output_format == 'sarif' && always()
+        uses: github/codeql-action/upload-sarif@v3
+        with:
+          sarif_file: grype-results.sarif
+          category: sbom-grype
+
+      - name: Upload Scan Report Artifact
+        if: inputs.upload_artifact == true && always()
+        uses: actions/upload-artifact@v4.3.1
+        with:
+          name: sbom-scan-report-${{ github.sha }}
+          path: grype-results.*
+          retention-days: 180
+
+      - name: Set Output
+        id: set_output
+        run: |
+          if [[ "${{ inputs.upload_artifact }}" == "true" ]]; then
+            echo "report_name=sbom-scan-report-${{ github.sha }}" >> $GITHUB_OUTPUT
+          else
+            echo "report_name=" >> $GITHUB_OUTPUT
+          fi
