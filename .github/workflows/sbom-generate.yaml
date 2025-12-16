@@ -1,0 +1,133 @@
+name: "Module: SBOM Generation (Syft)"
+# ------------------------------------------------------------------------------
+# Software Bill of Materials (SBOM) generation using Syft.
+#
+# CAPABILITIES:
+# - Inventory Only (No enforcement, never breaks builds)
+# - Dual Mode: Source (Filesystem) & Container (Image)
+# - CycloneDX & SPDX Standard Output
+# ------------------------------------------------------------------------------
+
+on:
+  workflow_call:
+    inputs:
+      # --- MODE ---
+      sbom_type:
+        description: "Target type: 'fs' (source code) or 'image' (container)"
+        type: string
+        default: "image"
+
+      # --- TARGETS ---
+      scan_path:
+        description: "Path to scan (for fs mode)"
+        type: string
+        default: "."
+      image_uri:
+        description: "Full container image URI (for image mode)"
+        type: string
+        default: ""
+
+      # --- FORMAT ---
+      format:
+        description: "Output format (cyclonedx-json, cyclonedx-xml, spdx-json, spdx-tag-value)"
+        type: string
+        default: "cyclonedx-json"
+
+      # --- REPORTING ---
+      upload_artifact:
+        description: "Upload SBOM as pipeline artifact?"
+        type: boolean
+        default: true
+
+    outputs:
+      sbom_artifact_name:
+        description: "Name of the uploaded SBOM artifact"
+        value: ${{ jobs.sbom-generate.outputs.artifact_name }}
+
+permissions:
+  contents: read
+  actions: write   # Required to upload artifacts
+
+jobs:
+  sbom-generate:
+    runs-on: ubuntu-latest
+    
+    outputs:
+      artifact_name: ${{ steps.set_output.outputs.artifact_name }}
+
+    steps:
+      - name: Checkout Code
+        uses: actions/checkout@v4.1.1
+
+      # ------------------------------------------------------------------------
+      # VALIDATION (Defensive Governance)
+      # ------------------------------------------------------------------------
+      - name: Validate Inputs
+        run: |
+          # Validate sbom_type
+          if [[ "${{ inputs.sbom_type }}" != "fs" ]] && [[ "${{ inputs.sbom_type }}" != "image" ]]; then
+            echo "::error::❌ Validation Failed: sbom_type must be 'fs' or 'image', got '${{ inputs.sbom_type }}'"
+            exit 1
+          fi
+          
+          # Validate image_uri for image mode
+          if [[ "${{ inputs.sbom_type }}" == "image" && -z "${{ inputs.image_uri }}" ]]; then
+            echo "::error::❌ Validation Failed: 'image_uri' is required when sbom_type is 'image'"
+            exit 1
+          fi
+          
+          # Validate format
+          VALID_FORMATS="cyclonedx-json|cyclonedx-xml|spdx-json|spdx-tag-value"
+          if [[ ! "${{ inputs.format }}" =~ ^($VALID_FORMATS)$ ]]; then
+            echo "::error::❌ Validation Failed: Invalid format '${{ inputs.format }}'"
+            echo "::error::   Supported formats: cyclonedx-json, cyclonedx-xml, spdx-json, spdx-tag-value"
+            exit 1
+          fi
+
+      # ------------------------------------------------------------------------
+      # SETUP
+      # ------------------------------------------------------------------------
+      - name: Install Syft
+        uses: anchore/sbom-action/download-syft@v0.16.0
+
+      # ------------------------------------------------------------------------
+      # MODE 1: FILESYSTEM SBOM
+      # ------------------------------------------------------------------------
+      - name: Generate SBOM (Filesystem)
+        timeout-minutes: 10
+        if: inputs.sbom_type == 'fs'
+        run: |
+          syft dir:${{ inputs.scan_path }} \
+            -o ${{ inputs.format }} \
+            > sbom-${{ github.sha }}.json
+
+      # ------------------------------------------------------------------------
+      # MODE 2: IMAGE SBOM
+      # ------------------------------------------------------------------------
+      - name: Generate SBOM (Image)
+        timeout-minutes: 10
+        if: inputs.sbom_type == 'image'
+        run: |
+          syft ${{ inputs.image_uri }} \
+            -o ${{ inputs.format }} \
+            > sbom-${{ github.sha }}.json
+
+      # ------------------------------------------------------------------------
+      # ARTIFACT OUTPUT
+      # ------------------------------------------------------------------------
+      - name: Upload SBOM Artifact
+        if: inputs.upload_artifact == true
+        uses: actions/upload-artifact@v4.3.1
+        with:
+          name: sbom-${{ github.sha }}
+          path: sbom-${{ github.sha }}.json
+          retention-days: 180 # 6 Months Retention for Audit
+
+      - name: Set Output
+        id: set_output
+        run: |
+          if [[ "${{ inputs.upload_artifact }}" == "true" ]]; then
+            echo "artifact_name=sbom-${{ github.sha }}" >> $GITHUB_OUTPUT
+          else
+            echo "artifact_name=" >> $GITHUB_OUTPUT
+          fi
