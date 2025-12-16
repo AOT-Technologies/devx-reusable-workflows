@@ -64,7 +64,7 @@ jobs:
           paths: ${{ inputs.scan_path }}
           exclude: ${{ inputs.exclude_paths }}
           severity: ${{ inputs.severity_threshold }}
-          generateS arif: true
+          generateSarif: true
         continue-on-error: ${{ inputs.fail_on_findings == false }}
 
       # ------------------------------------------------------------------------
