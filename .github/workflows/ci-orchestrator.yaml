@@ -22,6 +22,11 @@ on:
       registry_password:
         required: false
 
+# Prevent multiple runs on same ref
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
 permissions:
   contents: read
   security-events: write
@@ -35,6 +40,7 @@ jobs:
   # ---------------------------------------------------------------------------
   load-config:
     runs-on: ubuntu-latest
+    timeout-minutes: 5
     outputs:
       config: ${{ steps.parse.outputs.config }}
       language: ${{ steps.extract.outputs.language }}
@@ -46,16 +52,33 @@ jobs:
       - name: Validate Config File
         run: |
           if [[ ! -f "${{ inputs.config_path }}" ]]; then
-            echo "::error::❌ Config file not found: ${{ inputs.config_path }}"
-            echo "::error::   Please create a devx-ci.yaml configuration file"
+            echo "::error::Config file not found: ${{ inputs.config_path }}"
+            echo "::error::Please create a devx-ci.yaml configuration file"
             exit 1
           fi
           
           # Validate YAML syntax
           yq '.' ${{ inputs.config_path }} > /dev/null || {
-            echo "::error::❌ Invalid YAML in ${{ inputs.config_path }}"
+            echo "::error::Invalid YAML syntax in ${{ inputs.config_path }}"
             exit 1
           }
+          
+          # Validate required fields
+          LANGUAGE=$(yq '.project.language' ${{ inputs.config_path }})
+          if [[ "$LANGUAGE" == "null" || -z "$LANGUAGE" ]]; then
+            echo "::error::Missing required field: project.language"
+            echo "::error::Please specify project.language in your config (node, python, or maven)"
+            exit 1
+          fi
+          
+          # Validate language value
+          if [[ ! "$LANGUAGE" =~ ^(node|python|maven)$ ]]; then
+            echo "::error::Invalid language: $LANGUAGE"
+            echo "::error::Supported languages: node, python, maven"
+            exit 1
+          fi
+          
+          echo "Config validation passed"
 
       # Parse config and set as output
       - name: Parse CI Config
@@ -71,7 +94,7 @@ jobs:
         run: |
           LANGUAGE=$(yq '.project.language' ${{ inputs.config_path }})
           echo "language=$LANGUAGE" >> $GITHUB_OUTPUT
-          echo "📋 Detected language: $LANGUAGE"
+          echo "Detected language: $LANGUAGE"
 
   # ---------------------------------------------------------------------------
   # 2. PRE-BUILD SECURITY GATES (Parallel)
@@ -97,11 +120,15 @@ jobs:
 
   # ---------------------------------------------------------------------------
   # 3. LANGUAGE BUILDS (Routed)
+  # Explicit security gate validation - prevents bypass when gates are skipped
   # ---------------------------------------------------------------------------
   build-node:
     needs: [load-config, sast, iac]
     if: |
       always() &&
+      needs.load-config.result == 'success' &&
+      (needs.sast.result == 'success' || needs.sast.result == 'skipped') &&
+      (needs.iac.result == 'success' || needs.iac.result == 'skipped') &&
       !contains(needs.*.result, 'failure') &&
       !contains(needs.*.result, 'cancelled') &&
       needs.load-config.outputs.language == 'node'
@@ -116,6 +143,9 @@ jobs:
     needs: [load-config, sast, iac]
     if: |
       always() &&
+      needs.load-config.result == 'success' &&
+      (needs.sast.result == 'success' || needs.sast.result == 'skipped') &&
+      (needs.iac.result == 'success' || needs.iac.result == 'skipped') &&
       !contains(needs.*.result, 'failure') &&
       !contains(needs.*.result, 'cancelled') &&
       needs.load-config.outputs.language == 'python'
@@ -130,6 +160,9 @@ jobs:
     needs: [load-config, sast, iac]
     if: |
       always() &&
+      needs.load-config.result == 'success' &&
+      (needs.sast.result == 'success' || needs.sast.result == 'skipped') &&
+      (needs.iac.result == 'success' || needs.iac.result == 'skipped') &&
       !contains(needs.*.result, 'failure') &&
       !contains(needs.*.result, 'cancelled') &&
       needs.load-config.outputs.language == 'maven'
@@ -207,3 +240,32 @@ jobs:
       sbom_artifact_name: ${{ needs.sbom.outputs.sbom_artifact_name }}
       severity_threshold: ${{ fromJson(needs.load-config.outputs.config).security.sbom_scan.severity || 'medium' }}
       output_format: ${{ fromJson(needs.load-config.outputs.config).security.sbom_scan.format || 'sarif' }}
+
+  # ---------------------------------------------------------------------------
+  # 6. PIPELINE SUMMARY (Always runs)
+  # ---------------------------------------------------------------------------
+  summary:
+    if: always()
+    needs: [load-config, sast, iac, build-node, build-python, build-maven, docker, trivy, sbom, sbom-scan]
+    runs-on: ubuntu-latest
+    timeout-minutes: 2
+    steps:
+      - name: Generate Pipeline Summary
+        run: |
+          echo "## CI Pipeline Summary" >> $GITHUB_STEP_SUMMARY
+          echo "" >> $GITHUB_STEP_SUMMARY
+          echo "| Stage | Status |" >> $GITHUB_STEP_SUMMARY
+          echo "|-------|--------|" >> $GITHUB_STEP_SUMMARY
+          echo "| Config Load | ${{ needs.load-config.result }} |" >> $GITHUB_STEP_SUMMARY
+          echo "| SAST Scan | ${{ needs.sast.result }} |" >> $GITHUB_STEP_SUMMARY
+          echo "| IaC Scan | ${{ needs.iac.result }} |" >> $GITHUB_STEP_SUMMARY
+          echo "| Node Build | ${{ needs.build-node.result }} |" >> $GITHUB_STEP_SUMMARY
+          echo "| Python Build | ${{ needs.build-python.result }} |" >> $GITHUB_STEP_SUMMARY
+          echo "| Maven Build | ${{ needs.build-maven.result }} |" >> $GITHUB_STEP_SUMMARY
+          echo "| Docker Build | ${{ needs.docker.result }} |" >> $GITHUB_STEP_SUMMARY
+          echo "| Trivy Scan | ${{ needs.trivy.result }} |" >> $GITHUB_STEP_SUMMARY
+          echo "| SBOM Generation | ${{ needs.sbom.result }} |" >> $GITHUB_STEP_SUMMARY
+          echo "| SBOM Scan | ${{ needs.sbom-scan.result }} |" >> $GITHUB_STEP_SUMMARY
+          echo "" >> $GITHUB_STEP_SUMMARY
+          echo "**Language Detected:** ${{ needs.load-config.outputs.language }}" >> $GITHUB_STEP_SUMMARY
+          echo "**Commit SHA:** ${{ github.sha }}" >> $GITHUB_STEP_SUMMARY

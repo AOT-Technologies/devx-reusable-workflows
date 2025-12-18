@@ -44,6 +44,38 @@ on:
         description: "Name of the uploaded SBOM artifact"
         value: ${{ jobs.sbom-generate.outputs.artifact_name }}
 
+  # Allow manual trigger for testing
+  workflow_dispatch:
+    inputs:
+      sbom_type:
+        description: "SBOM type"
+        type: choice
+        options:
+          - fs
+          - image
+        default: "image"
+      scan_path:
+        description: "Path to scan (fs mode)"
+        type: string
+        default: "."
+      image_uri:
+        description: "Image URI (image mode)"
+        type: string
+        default: ""
+      format:
+        description: "Output format"
+        type: choice
+        options:
+          - cyclonedx-json
+          - cyclonedx-xml
+          - spdx-json
+          - spdx-tag-value
+        default: "cyclonedx-json"
+      upload_artifact:
+        description: "Upload artifact"
+        type: boolean
+        default: true
+
 permissions:
   contents: read
   actions: write   # Required to upload artifacts
@@ -51,6 +83,7 @@ permissions:
 jobs:
   sbom-generate:
     runs-on: ubuntu-latest
+    timeout-minutes: 20
     
     outputs:
       artifact_name: ${{ steps.set_output.outputs.artifact_name }}
@@ -66,21 +99,21 @@ jobs:
         run: |
           # Validate sbom_type
           if [[ "${{ inputs.sbom_type }}" != "fs" ]] && [[ "${{ inputs.sbom_type }}" != "image" ]]; then
-            echo "::error::❌ Validation Failed: sbom_type must be 'fs' or 'image', got '${{ inputs.sbom_type }}'"
+            echo "::error::Validation Failed: sbom_type must be 'fs' or 'image', got '${{ inputs.sbom_type }}'"
             exit 1
           fi
           
           # Validate image_uri for image mode
           if [[ "${{ inputs.sbom_type }}" == "image" && -z "${{ inputs.image_uri }}" ]]; then
-            echo "::error::❌ Validation Failed: 'image_uri' is required when sbom_type is 'image'"
+            echo "::error::Validation Failed: 'image_uri' is required when sbom_type is 'image'"
             exit 1
           fi
           
           # Validate format
           VALID_FORMATS="cyclonedx-json|cyclonedx-xml|spdx-json|spdx-tag-value"
           if [[ ! "${{ inputs.format }}" =~ ^($VALID_FORMATS)$ ]]; then
-            echo "::error::❌ Validation Failed: Invalid format '${{ inputs.format }}'"
-            echo "::error::   Supported formats: cyclonedx-json, cyclonedx-xml, spdx-json, spdx-tag-value"
+            echo "::error::Validation Failed: Invalid format '${{ inputs.format }}'"
+            echo "::error::Supported formats: cyclonedx-json, cyclonedx-xml, spdx-json, spdx-tag-value"
             exit 1
           fi
 
@@ -90,6 +123,12 @@ jobs:
       - name: Install Syft
         uses: anchore/sbom-action/download-syft@v0.16.0
 
+      - name: Update Vulnerability Database
+        run: |
+          echo "Updating Syft vulnerability database..."
+          syft db update
+          syft db status
+
       # ------------------------------------------------------------------------
       # MODE 1: FILESYSTEM SBOM
       # ------------------------------------------------------------------------
@@ -97,6 +136,7 @@ jobs:
         timeout-minutes: 10
         if: inputs.sbom_type == 'fs'
         run: |
+          echo "Generating filesystem SBOM for: ${{ inputs.scan_path }}"
           syft dir:${{ inputs.scan_path }} \
             -o ${{ inputs.format }} \
             > sbom-${{ github.sha }}.json
@@ -108,6 +148,7 @@ jobs:
         timeout-minutes: 10
         if: inputs.sbom_type == 'image'
         run: |
+          echo "Generating image SBOM for: ${{ inputs.image_uri }}"
           syft ${{ inputs.image_uri }} \
             -o ${{ inputs.format }} \
             > sbom-${{ github.sha }}.json

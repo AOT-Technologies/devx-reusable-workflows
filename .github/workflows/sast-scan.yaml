@@ -40,6 +40,38 @@ on:
         description: "Upload SARIF to GitHub Security tab"
         type: boolean
         default: true
+  
+  # Allow manual trigger for testing
+  workflow_dispatch:
+    inputs:
+      scan_path:
+        description: "Path to source code"
+        type: string
+        default: "."
+      exclude_paths:
+        description: "Paths to exclude"
+        type: string
+        default: ""
+      ruleset:
+        description: "Semgrep ruleset"
+        type: string
+        default: "p/ci"
+      severity_threshold:
+        description: "Minimum severity"
+        type: choice
+        options:
+          - INFO
+          - WARNING
+          - ERROR
+        default: "ERROR"
+      fail_on_findings:
+        description: "Fail on findings"
+        type: boolean
+        default: true
+      upload_sarif:
+        description: "Upload SARIF"
+        type: boolean
+        default: true
 
 permissions:
   contents: read
@@ -48,6 +80,7 @@ permissions:
 jobs:
   sast-scan:
     runs-on: ubuntu-latest
+    timeout-minutes: 20
 
     steps:
       - name: Checkout Code
@@ -58,7 +91,7 @@ jobs:
       # ------------------------------------------------------------------------
       - name: Run Semgrep SAST
         timeout-minutes: 15
-        uses: returntocorp/semgrep-action@v1.6.0
+        uses: returntocorp/semgrep-action@v1
         with:
           config: ${{ inputs.ruleset }}
           paths: ${{ inputs.scan_path }}

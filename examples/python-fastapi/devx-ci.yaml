@@ -1,0 +1,76 @@
+# DevX CI Configuration for Python FastAPI Application
+# This configuration enables automated CI/CD with security scanning
+
+project:
+  language: python
+  version: "3.11"                # Python 3.11
+  working_directory: "."
+
+build:
+  run_tests: true                # Run pytest before building
+  artifact_path: "dist/"         # Upload distribution files (wheels/sdist)
+
+security:
+  # SAST: Static Application Security Testing
+  # Scans source code for vulnerabilities, secrets, and bad practices
+  sast:
+    enabled: true
+    scan_path: "./app"           # Only scan application code
+    exclude_paths: "tests/,__pycache__/,.pytest_cache/,venv/,dist/"
+    severity: ERROR              # Report ERROR level findings
+    fail_on_findings: true       # Block pipeline if issues found
+  
+  # IaC: Infrastructure as Code scanning
+  # Enable if you have Terraform/K8s/CloudFormation
+  iac:
+    enabled: false
+  
+  # Trivy: Container vulnerability scanning
+  # Scans the built Docker image for OS/package vulnerabilities
+  trivy:
+    enabled: true
+    severity: CRITICAL,HIGH      # Block on critical and high severity
+    fail_on_vuln: true           # Block pipeline if vulnerabilities found
+  
+  # SBOM: Software Bill of Materials
+  # Creates an inventory of all dependencies
+  sbom:
+    enabled: true
+    format: cyclonedx-json       # Industry standard format
+  
+  # SBOM Scan: Vulnerability scanning based on SBOM
+  # Checks SBOM against known CVE databases
+  sbom_scan:
+    enabled: true
+    severity: medium             # Report medium and above
+    format: sarif                # Upload to GitHub Security tab
+
+docker:
+  enabled: true
+  dockerfile: Dockerfile
+  image_name: python-fastapi-api # Your app name
+  image_tag: ""                  # Defaults to git commit SHA
+  registry_type: ecr             # AWS ECR (can be 'generic' for GHCR/DockerHub)
+  
+  # Multi-line build arguments
+  build_args: |
+    PYTHON_VERSION=3.11
+    BUILD_DATE=${{ github.event.head_commit.timestamp }}
+  
+  platforms: linux/amd64         # Single platform (faster builds)
+  # For multi-arch: linux/amd64,linux/arm64
+
+# AWS Configuration (required for ECR)
+aws:
+  region: us-east-1
+  role_to_assume: arn:aws:iam::123456789012:role/GitHubActionsRole
+
+# For GHCR instead of ECR, use:
+# docker:
+#   registry_type: generic
+#   registry_url: ghcr.io
+#   image_name: your-org/python-fastapi-api
+# 
+# Then add these secrets to your repo:
+#   REGISTRY_USERNAME: your-github-username
+#   REGISTRY_PASSWORD: github-token-with-packages-write

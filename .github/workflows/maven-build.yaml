@@ -13,12 +13,12 @@ on:
       java_version:
         description: "Java version"
         type: string
-        default: "8"
+        default: "8" #change to 17 for better stability
       distribution:
         description: "JDK Distribution"
         type: string
         default: "temurin"
-      # --- NEW: TEST INPUTS ---
+      # --- TEST INPUTS ---
       run_tests:
         description: "Run unit tests?"
         type: boolean
@@ -28,11 +28,13 @@ on:
         type: string
         # We enforce batch mode (-B) to keep logs clean
         default: "mvn test -B"
-      # ------------------------
+      # --- BUILD INPUTS ---
       maven_args:
-        description: "Maven packaging arguments (Skips tests for speed)"
+        description: "Maven packaging arguments"
         type: string
-        # Note: We skip tests here because we run them explicitly in the previous step
+        # NOTE: Tests are skipped here because they run in a separate step above.
+        # Checkstyle, PMD, and license checks are skipped for build speed.
+        # If you need these checks, enable them in your pom.xml or override this input.
         default: "-B clean package -Dmaven.test.skip=true -Dcheckstyle.skip=true -Dpmd.skip=true -Dlicense.skip=true -Dmaven.antrun.skip=true"
       artifact_path:
         description: "Path to jar/war relative to working_directory. Leave blank to skip."
@@ -44,6 +46,43 @@ on:
         description: "Name of uploaded artifact (empty if no upload)"
         value: ${{ jobs.build.outputs.artifact_name }}
 
+  # Allow manual trigger for testing
+  workflow_dispatch:
+    inputs:
+      working_directory:
+        description: "Directory with pom.xml"
+        type: string
+        default: "."
+      java_version:
+        description: "Java version"
+        type: string
+        default: "17"
+      distribution:
+        description: "JDK distribution"
+        type: choice
+        options:
+          - temurin
+          - zulu
+          - adopt
+          - liberica
+        default: "temurin"
+      run_tests:
+        description: "Run tests"
+        type: boolean
+        default: true
+      test_script:
+        description: "Test command"
+        type: string
+        default: "mvn test -B"
+      maven_args:
+        description: "Maven build args"
+        type: string
+        default: "-B clean package -Dmaven.test.skip=true -Dcheckstyle.skip=true -Dpmd.skip=true -Dlicense.skip=true -Dmaven.antrun.skip=true"
+      artifact_path:
+        description: "Artifact path"
+        type: string
+        default: ""
+
 permissions:
   contents: read
   actions: write        # Required for upload-artifact
@@ -51,6 +90,7 @@ permissions:
 jobs:
   build:
     runs-on: ubuntu-latest
+    timeout-minutes: 45
     defaults:
       run:
         working-directory: ${{ inputs.working_directory }}
@@ -75,6 +115,19 @@ jobs:
         if: inputs.run_tests == true
         # We run this BEFORE packaging to catch errors early
         run: ${{ inputs.test_script }} -f pom.xml
+
+      # Added test results capture
+      - name: Upload Test Results
+        if: always() && inputs.run_tests == true
+        uses: actions/upload-artifact@v4.3.1
+        with:
+          name: maven-test-results-${{ github.sha }}
+          path: |
+            ${{ inputs.working_directory }}/target/surefire-reports/
+            ${{ inputs.working_directory }}/target/failsafe-reports/
+            ${{ inputs.working_directory }}/target/site/jacoco/
+          retention-days: 30
+          if-no-files-found: ignore
 
       - name: Build with Maven
         run: mvn ${{ inputs.maven_args }} -f pom.xml

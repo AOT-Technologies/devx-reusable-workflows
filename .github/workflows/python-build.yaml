@@ -17,7 +17,7 @@ on:
         description: "Command to install dependencies"
         type: string
         default: "pip install -r requirements.txt"
-      # --- NEW: TEST INPUTS ---
+      # --- TEST INPUTS ---
       run_tests:
         description: "Run unit tests?"
         type: boolean
@@ -26,7 +26,7 @@ on:
         description: "Script to run tests"
         type: string
         default: "python -m pytest"
-      # ------------------------
+      # --- BUILD INPUTS ---
       build_command:
         description: "Command to build/package (optional)"
         type: string
@@ -41,6 +41,38 @@ on:
         description: "Name of uploaded artifact (empty if no upload)"
         value: ${{ jobs.build.outputs.artifact_name }}
 
+  # Allow manual trigger for testing
+  workflow_dispatch:
+    inputs:
+      working_directory:
+        description: "Working directory"
+        type: string
+        default: "."
+      python_version:
+        description: "Python version"
+        type: string
+        default: "3.11"
+      install_command:
+        description: "Install command"
+        type: string
+        default: "pip install -r requirements.txt"
+      run_tests:
+        description: "Run tests"
+        type: boolean
+        default: true
+      test_script:
+        description: "Test script"
+        type: string
+        default: "python -m pytest"
+      build_command:
+        description: "Build command"
+        type: string
+        default: ""
+      artifact_path:
+        description: "Artifact path"
+        type: string
+        default: ""
+
 permissions:
   contents: read
   actions: write        # Required for upload-artifact
@@ -48,6 +80,7 @@ permissions:
 jobs:
   build:
     runs-on: ubuntu-latest
+    timeout-minutes: 30
     defaults:
       run:
         working-directory: ${{ inputs.working_directory }}
@@ -81,6 +114,21 @@ jobs:
       - name: Run Unit Tests
         if: inputs.run_tests == true
         run: ${{ inputs.test_script }}
+
+      # Added test results capture
+      - name: Upload Test Results
+        if: always() && inputs.run_tests == true
+        uses: actions/upload-artifact@v4.3.1
+        with:
+          name: python-test-results-${{ github.sha }}
+          path: |
+            ${{ inputs.working_directory }}/.coverage
+            ${{ inputs.working_directory }}/coverage.xml
+            ${{ inputs.working_directory }}/htmlcov/
+            ${{ inputs.working_directory }}/test-results/
+            ${{ inputs.working_directory }}/junit.xml
+          retention-days: 30
+          if-no-files-found: ignore
 
       # ------------------------------------------------------------------------
       # BUILD

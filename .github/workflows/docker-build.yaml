@@ -73,6 +73,56 @@ on:
       image_uri:
         description: "Full URI of the pushed image"
         value: ${{ jobs.build-push.outputs.image_uri }}
+      image_digest:
+        description: "SHA256 digest of the pushed image (immutable reference)"
+        value: ${{ jobs.build-push.outputs.image_digest }}
+
+  # Allow manual trigger for testing
+  workflow_dispatch:
+    inputs:
+      working_directory:
+        description: "Directory with Dockerfile"
+        type: string
+        default: "."
+      dockerfile:
+        description: "Dockerfile name"
+        type: string
+        default: "Dockerfile"
+      image_name:
+        description: "Image name"
+        type: string
+        required: true
+      image_tag:
+        description: "Image tag"
+        type: string
+        default: ""
+      registry_type:
+        description: "Registry type"
+        type: choice
+        options:
+          - ecr
+          - generic
+        default: "ecr"
+      registry_url:
+        description: "Registry URL (generic mode)"
+        type: string
+        default: ""
+      aws_region:
+        description: "AWS Region (ECR mode)"
+        type: string
+        default: "us-east-1"
+      role_to_assume:
+        description: "IAM Role ARN (ECR mode)"
+        type: string
+        default: ""
+      build_args:
+        description: "Build arguments"
+        type: string
+        default: ""
+      platforms:
+        description: "Target platforms"
+        type: string
+        default: "linux/amd64"
 
 permissions:
   id-token: write       # REQUIRED: For OIDC (ECR)
@@ -83,12 +133,14 @@ permissions:
 jobs:
   build-push:
     runs-on: ubuntu-latest
+    timeout-minutes: 45
     defaults:
       run:
         working-directory: ${{ inputs.working_directory }}
 
     outputs:
       image_uri: ${{ steps.set_output.outputs.image_uri }}
+      image_digest: ${{ steps.set_output.outputs.image_digest }}
 
     steps:
       - name: Checkout Code
@@ -102,7 +154,7 @@ jobs:
           # Validate ECR mode requirements
           if [[ "${{ inputs.registry_type }}" == "ecr" ]]; then
             if [[ -z "${{ inputs.role_to_assume }}" ]]; then
-              echo "❌ ERROR: 'role_to_assume' is required when registry_type is 'ecr'"
+              echo "::error::ERROR: 'role_to_assume' is required when registry_type is 'ecr'"
               exit 1
             fi
           fi
@@ -110,22 +162,22 @@ jobs:
           # Validate Generic mode requirements
           if [[ "${{ inputs.registry_type }}" == "generic" ]]; then
             if [[ -z "${{ inputs.registry_url }}" ]]; then
-              echo "❌ ERROR: 'registry_url' is required when registry_type is 'generic'"
+              echo "::error::ERROR: 'registry_url' is required when registry_type is 'generic'"
               exit 1
             fi
             if [[ -z "${{ secrets.registry_username }}" ]] || [[ -z "${{ secrets.registry_password }}" ]]; then
-              echo "❌ ERROR: 'registry_username' and 'registry_password' secrets are required for generic mode"
+              echo "::error::ERROR: 'registry_username' and 'registry_password' secrets are required for generic mode"
               exit 1
             fi
           fi
           
           # Validate registry_type value
           if [[ "${{ inputs.registry_type }}" != "ecr" ]] && [[ "${{ inputs.registry_type }}" != "generic" ]]; then
-            echo "❌ ERROR: registry_type must be either 'ecr' or 'generic', got: '${{ inputs.registry_type }}'"
+            echo "::error::ERROR: registry_type must be either 'ecr' or 'generic', got: '${{ inputs.registry_type }}'"
             exit 1
           fi
           
-          echo "✅ Input validation passed"
+          echo "Input validation passed"
 
       # ------------------------------------------------------------------------
       # STRATEGY A: AWS ECR (OIDC)
@@ -177,21 +229,28 @@ jobs:
             REGISTRY="${{ inputs.registry_url }}"
           fi
           
-          # 3. Construct Full URI
-          # Handle Docker Hub edge case where registry_url might be empty or 'docker.io'
-          if [[ "$REGISTRY" == "docker.io" ]] || [[ -z "$REGISTRY" ]]; then
-             FULL_URI="${{ inputs.image_name }}:$TAG"
+          # 3. Construct Full URI with improved Docker Hub handling
+          # FIXED: Always use full registry prefix for consistency
+          if [[ -z "$REGISTRY" ]]; then
+            # No registry specified - default to Docker Hub with explicit prefix
+            FULL_URI="docker.io/${{ inputs.image_name }}:$TAG"
+          elif [[ "$REGISTRY" == "docker.io" ]]; then
+            # Explicitly using Docker Hub - maintain prefix for consistency
+            FULL_URI="docker.io/${{ inputs.image_name }}:$TAG"
           else
-             FULL_URI="$REGISTRY/${{ inputs.image_name }}:$TAG"
+            # All other registries (GHCR, ECR, Artifactory, etc.)
+            FULL_URI="$REGISTRY/${{ inputs.image_name }}:$TAG"
           fi
           
           echo "tag=$TAG" >> $GITHUB_OUTPUT
           echo "full_uri=$FULL_URI" >> $GITHUB_OUTPUT
+          echo "Image will be pushed to: $FULL_URI"
 
       # ------------------------------------------------------------------------
       # SHARED: BUILD & PUSH
       # ------------------------------------------------------------------------
       - name: Build and Push
+        id: build-push
         uses: docker/build-push-action@v5.1.0
         with:
           context: ${{ inputs.working_directory }}
@@ -203,6 +262,8 @@ jobs:
           # Standard GHA Caching
           cache-from: type=gha
           cache-to: type=gha,mode=max
+          # DOCUMENTED: Provenance disabled for compatibility with older registries
+          # and to reduce image size. Enable for SLSA compliance if registry supports it.
           provenance: false
 
       # ------------------------------------------------------------------------
@@ -210,4 +271,9 @@ jobs:
       # ------------------------------------------------------------------------
       - name: Set Output
         id: set_output
-        run: echo "image_uri=${{ steps.meta.outputs.full_uri }}" >> $GITHUB_OUTPUT
+        run: |
+          echo "image_uri=${{ steps.meta.outputs.full_uri }}" >> $GITHUB_OUTPUT
+          echo "image_digest=${{ steps.build-push.outputs.digest }}" >> $GITHUB_OUTPUT
+          echo "Image pushed successfully!"
+          echo "URI: ${{ steps.meta.outputs.full_uri }}"
+          echo "Digest: ${{ steps.build-push.outputs.digest }}"

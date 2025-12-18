@@ -51,6 +51,34 @@ on:
         type: boolean
         default: true
 
+  # Allow manual trigger for testing
+  workflow_dispatch:
+    inputs:
+      working_directory:
+        description: "Directory to scan"
+        type: string
+        default: "."
+      quiet_output:
+        description: "Quiet output"
+        type: boolean
+        default: true
+      soft_fail:
+        description: "Soft fail (audit mode)"
+        type: boolean
+        default: false
+      skip_check:
+        description: "Checks to skip"
+        type: string
+        default: ""
+      frameworks:
+        description: "Frameworks (comma-separated)"
+        type: string
+        default: ""
+      upload_sarif:
+        description: "Upload SARIF"
+        type: boolean
+        default: true
+
 permissions:
   contents: read
   security-events: write
@@ -58,6 +86,7 @@ permissions:
 jobs:
   iac-scan:
     runs-on: ubuntu-latest
+    timeout-minutes: 20
 
     steps:
       - name: Checkout Code
@@ -69,7 +98,7 @@ jobs:
       - name: Run Checkov IaC Scan
         timeout-minutes: 15
         id: checkov
-        uses: bridgecrewio/checkov-action@v12.2618.0 # PINNED
+        uses: bridgecrewio/checkov-action@v12.2850.0
         with:
           directory: ${{ inputs.working_directory }}
           skip_check: ${{ inputs.skip_check }}

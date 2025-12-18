@@ -53,6 +53,44 @@ on:
         description: "Name of the uploaded scan report artifact"
         value: ${{ jobs.sbom-scan.outputs.report_name }}
 
+  # Allow manual trigger for testing
+  workflow_dispatch:
+    inputs:
+      sbom_path:
+        description: "Path to SBOM file"
+        type: string
+        default: ""
+      sbom_artifact_name:
+        description: "Artifact name to download"
+        type: string
+        default: ""
+      severity_threshold:
+        description: "Severity threshold"
+        type: choice
+        options:
+          - negligible
+          - low
+          - medium
+          - high
+          - critical
+        default: "medium"
+      output_format:
+        description: "Output format"
+        type: choice
+        options:
+          - sarif
+          - json
+          - table
+        default: "sarif"
+      upload_sarif:
+        description: "Upload SARIF"
+        type: boolean
+        default: true
+      upload_artifact:
+        description: "Upload report artifact"
+        type: boolean
+        default: true
+
 permissions:
   contents: read
   security-events: write
@@ -61,7 +99,7 @@ permissions:
 jobs:
   sbom-scan:
     runs-on: ubuntu-latest
-    # HARD GUARANTEE: This job will never turn the pipeline red.
+    timeout-minutes: 15
     continue-on-error: true
 
     outputs:
@@ -88,17 +126,39 @@ jobs:
           # 1. Start with the explicit path input
           SBOM_FILE="${{ inputs.sbom_path }}"
           
-          # 2. If no path, but artifact was downloaded, look for a JSON file
+          # 2. If no path, but artifact was downloaded, look for SBOM files specifically
           if [[ -z "$SBOM_FILE" && -n "${{ inputs.sbom_artifact_name }}" ]]; then
-            SBOM_FILE=$(find . -name "*.json" -type f | head -n 1)
+            # First try: Look for files matching sbom-*.json pattern
+            SBOM_FILE=$(find . -name "sbom-*.json" -type f -print -quit)
+            
+            # Second try: Look for files containing SBOM markers (CycloneDX or SPDX)
+            if [[ -z "$SBOM_FILE" ]]; then
+              echo "Looking for SBOM format markers..."
+              for json_file in $(find . -name "*.json" -type f); do
+                if grep -q -E '"bomFormat"|"spdxVersion"' "$json_file" 2>/dev/null; then
+                  SBOM_FILE="$json_file"
+                  echo "Found SBOM format in: $json_file"
+                  break
+                fi
+              done
+            fi
           fi
           
           # 3. Final Validation
           if [[ ! -f "$SBOM_FILE" ]]; then
-            echo "::error::❌ SBOM file not found. Ensure 'sbom_path' is set or 'sbom_artifact_name' was downloaded correctly."
+            echo "::error::SBOM file not found."
+            echo "::error::Ensure 'sbom_path' is set or 'sbom_artifact_name' was downloaded correctly."
+            echo "::error::Searched for: sbom-*.json or files containing bomFormat/spdxVersion"
             exit 1
           fi
           
+          # 4. Validate SBOM format
+          echo "Validating SBOM format..."
+          if ! grep -q -E '"bomFormat"|"spdxVersion"' "$SBOM_FILE"; then
+            echo "::warning::File found but doesn't appear to be a valid SBOM (missing bomFormat or spdxVersion)"
+          fi
+          
+          echo "Using SBOM file: $SBOM_FILE"
           echo "SBOM_FILE=$SBOM_FILE" >> $GITHUB_ENV
 
       # ------------------------------------------------------------------------
@@ -106,11 +166,15 @@ jobs:
       # ------------------------------------------------------------------------
       - name: Install Grype
         run: |
-          curl -sSfL https://raw.githubusercontent.com/anchore/grype/main/install.sh | sh -s -- -b /usr/local/bin
+          VERSION="v0.74.7"
+          echo "Installing Grype ${VERSION}..."
+          curl -sSfL https://raw.githubusercontent.com/anchore/grype/${VERSION}/install.sh | sh -s -- -b /usr/local/bin ${VERSION}
+          grype version
 
       - name: Run Grype Analysis
         timeout-minutes: 10
         run: |
+          echo "Scanning SBOM: ${{ env.SBOM_FILE }}"
           grype sbom:${{ env.SBOM_FILE }} \
             --fail-on ${{ inputs.severity_threshold }} \
             --output ${{ inputs.output_format }} \

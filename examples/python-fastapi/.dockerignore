@@ -1,0 +1,52 @@
+# Virtual environments
+venv
+env
+.venv
+.env
+
+# Python cache
+__pycache__
+*.py[cod]
+*$py.class
+*.so
+
+# Testing
+.pytest_cache
+.coverage
+htmlcov
+.tox
+.hypothesis
+
+# Distribution / packaging
+dist
+build
+*.egg-info
+.eggs
+
+# Git
+.git
+.gitignore
+
+# CI/CD
+.github
+devx-ci.yaml
+
+# Documentation
+*.md
+docs
+
+# IDE
+.vscode
+.idea
+*.swp
+*.swo
+*~
+
+# OS
+.DS_Store
+Thumbs.db
+
+# Development
+requirements-dev.txt
+pytest.ini
+.editorconfig
