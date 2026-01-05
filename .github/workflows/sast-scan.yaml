@@ -76,6 +76,7 @@ on:
 permissions:
   contents: read
   security-events: write
+  actions: read  # Required for workflow telemetry
 
 jobs:
   sast-scan:
@@ -87,25 +88,97 @@ jobs:
         uses: actions/checkout@v4.1.1
 
       # ------------------------------------------------------------------------
+      # SETUP
+      # ------------------------------------------------------------------------
+      - name: Setup Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+
+      - name: Install Semgrep
+        run: |
+          python -m pip install --upgrade pip
+          pip install semgrep
+
+      # ------------------------------------------------------------------------
       # EXECUTION
       # ------------------------------------------------------------------------
       - name: Run Semgrep SAST
+        id: semgrep
         timeout-minutes: 15
-        uses: returntocorp/semgrep-action@v1
-        with:
-          config: ${{ inputs.ruleset }}
-          paths: ${{ inputs.scan_path }}
-          exclude: ${{ inputs.exclude_paths }}
-          severity: ${{ inputs.severity_threshold }}
-          generateSarif: true
         continue-on-error: ${{ inputs.fail_on_findings == false }}
+        run: |
+          echo "🔍 Running Semgrep SAST scan..."
+          echo "Config: ${{ inputs.ruleset }}"
+          echo "Severity: ${{ inputs.severity_threshold }}"
+          echo "Scan path: ${{ inputs.scan_path }}"
+          
+          # Build exclude flags
+          EXCLUDE_FLAGS=""
+          if [ -n "${{ inputs.exclude_paths }}" ]; then
+            IFS=',' read -ra EXCLUDES <<< "${{ inputs.exclude_paths }}"
+            for exclude in "${EXCLUDES[@]}"; do
+              exclude=$(echo "$exclude" | xargs)  # Trim whitespace
+              if [ -n "$exclude" ]; then
+                EXCLUDE_FLAGS="$EXCLUDE_FLAGS --exclude $exclude"
+              fi
+            done
+            echo "Excluding: ${{ inputs.exclude_paths }}"
+          fi
+
+          # Map severity threshold to Semgrep format
+          SEVERITY_FLAG=""
+          case "${{ inputs.severity_threshold }}" in
+            ERROR)
+              SEVERITY_FLAG="--severity=ERROR"
+              ;;
+            WARNING)
+              SEVERITY_FLAG="--severity=WARNING --severity=ERROR"
+              ;;
+            INFO)
+              SEVERITY_FLAG="--severity=INFO --severity=WARNING --severity=ERROR"
+              ;;
+          esac
+
+          # Run Semgrep and generate SARIF
+          EXIT_CODE=0
+          semgrep scan \
+            --config=${{ inputs.ruleset }} \
+            $SEVERITY_FLAG \
+            $EXCLUDE_FLAGS \
+            --sarif \
+            --output=semgrep.sarif \
+            ${{ inputs.scan_path }} || EXIT_CODE=$?
+
+          # Also output to console for visibility
+          echo ""
+          echo "📊 Scan Results:"
+          semgrep scan \
+            --config=${{ inputs.ruleset }} \
+            $SEVERITY_FLAG \
+            $EXCLUDE_FLAGS \
+            ${{ inputs.scan_path }} || true
+
+          # Handle exit code based on policy
+          if [ $EXIT_CODE -ne 0 ]; then
+            if [ "${{ inputs.fail_on_findings }}" == "true" ]; then
+              echo "::error::❌ Semgrep found security issues (severity: ${{ inputs.severity_threshold }})"
+              echo "::error::Review findings in the Security tab or check the logs above"
+              exit $EXIT_CODE
+            else
+              echo "::warning::⚠️ Semgrep found issues but fail_on_findings is false (audit mode)"
+              exit 0
+            fi
+          else
+            echo "✅ No security issues found"
+          fi
 
       # ------------------------------------------------------------------------
       # REPORTING
       # ------------------------------------------------------------------------
       - name: Upload SARIF to Security Tab
         if: inputs.upload_sarif == true && always()
-        uses: github/codeql-action/upload-sarif@v3
+        uses: github/codeql-action/upload-sarif@v4
         with:
           sarif_file: semgrep.sarif
           category: sast-semgrep
