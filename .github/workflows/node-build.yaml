@@ -20,11 +20,15 @@ on:
       test_script:
         description: "Script to run tests"
         type: string
-        default: "npm test"
+        default: "test"
       # --- BUILD INPUTS ---
+      run_build:  # ✅ NEW: Make build optional
+        description: "Enable build step?"
+        type: boolean
+        default: false
       build_script:
         type: string
-        default: "npm run build"
+        default: "build"
       artifact_path:
         type: string
         default: ""
@@ -51,11 +55,15 @@ on:
       test_script:
         description: "Test script"
         type: string
-        default: "npm test"
+        default: "test"
+      run_build:
+        description: "Run build"
+        type: boolean
+        default: false
       build_script:
         description: "Build script"
         type: string
-        default: "npm run build"
+        default: "build"
       artifact_path:
         description: "Artifact path"
         type: string
@@ -63,7 +71,7 @@ on:
 
 permissions:
   contents: read
-  actions: write        # Required for upload-artifact
+  actions: write
 
 jobs:
   build:
@@ -74,8 +82,8 @@ jobs:
         working-directory: ${{ inputs.working_directory }}
     outputs:
       artifact_name: ${{ steps.set_artifact_name.outputs.artifact_name }}
+    
     steps:
-
       - name: Checkout Code
         uses: actions/checkout@v4.1.1
 
@@ -89,17 +97,26 @@ jobs:
       - name: Install Dependencies
         run: npm ci --prefer-offline --no-audit
 
-      # --- UNIT TEST STEP ---
-      - name: Run Unit Tests
+      - name: Check if Test Script Exists
         if: inputs.run_tests == true
-        run: ${{ inputs.test_script }}
+        id: check_test
+        run: |
+          if npm run | grep -q "^  ${{ inputs.test_script }}$"; then
+            echo "test_exists=true" >> $GITHUB_OUTPUT
+          else
+            echo "test_exists=false" >> $GITHUB_OUTPUT
+            echo "Test script '${{ inputs.test_script }}' not found"
+          fi
 
-      # Added test results capture
+      - name: Run Unit Tests
+        if: inputs.run_tests == true && steps.check_test.outputs.test_exists == 'true'
+        run: npm run ${{ inputs.test_script }}
+
       - name: Upload Test Results
         if: always() && inputs.run_tests == true
         uses: actions/upload-artifact@v4.3.1
         with:
-          name: node-test-results-${{ github.sha }}
+          name: node-test-results-${{ github.run_id }}
           path: |
             ${{ inputs.working_directory }}/coverage/
             ${{ inputs.working_directory }}/test-results/
@@ -107,15 +124,27 @@ jobs:
           retention-days: 30
           if-no-files-found: ignore
 
+      - name: Check if Build Script Exists
+        if: inputs.run_build == true
+        id: check_build
+        run: |
+          if npm run | grep -q "^  ${{ inputs.build_script }}$"; then
+            echo "build_exists=true" >> $GITHUB_OUTPUT
+          else
+            echo "build_exists=false" >> $GITHUB_OUTPUT
+            echo "::error::Build enabled but script '${{ inputs.build_script }}' not found"
+            exit 1
+          fi
+
       - name: Build Application
-        if: inputs.build_script != 'none' && inputs.build_script != ''
-        run: ${{ inputs.build_script }}
+        if: inputs.run_build == true && steps.check_build.outputs.build_exists == 'true'
+        run: npm run ${{ inputs.build_script }}
 
       - name: Upload Build Artifact
         if: inputs.artifact_path != ''
         uses: actions/upload-artifact@v4.3.1
         with:
-          name: node-build-${{ github.sha }}
+          name: node-build-${{ github.run_id }}
           path: ${{ inputs.working_directory }}/${{ inputs.artifact_path }}
           retention-days: 90
 
@@ -123,7 +152,7 @@ jobs:
         id: set_artifact_name
         run: |
           if [[ -n "${{ inputs.artifact_path }}" ]]; then
-            echo "artifact_name=node-build-${{ github.sha }}" >> $GITHUB_OUTPUT
+            echo "artifact_name=node-build-${{ github.run_id }}" >> $GITHUB_OUTPUT
           else
             echo "artifact_name=" >> $GITHUB_OUTPUT
           fi
