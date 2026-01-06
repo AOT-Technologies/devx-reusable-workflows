@@ -137,6 +137,8 @@ jobs:
       working_directory: ${{ fromJson(needs.load-config.outputs.config).project.working_directory || '.' }}
       node_version: ${{ fromJson(needs.load-config.outputs.config).project.version || '20' }}
       run_tests: ${{ fromJson(needs.load-config.outputs.config).build.run_tests != false }}
+      test_script: ${{ fromJson(needs.load-config.outputs.config).build.test_script || 'npm test' }}
+      build_script: ${{ fromJson(needs.load-config.outputs.config).build.build_script || 'npm run build' }}
       artifact_path: ${{ fromJson(needs.load-config.outputs.config).build.artifact_path || '' }}
 
   build-python:
@@ -154,6 +156,8 @@ jobs:
       working_directory: ${{ fromJson(needs.load-config.outputs.config).project.working_directory || '.' }}
       python_version: ${{ fromJson(needs.load-config.outputs.config).project.version || '3.11' }}
       run_tests: ${{ fromJson(needs.load-config.outputs.config).build.run_tests != false }}
+      test_script: ${{ fromJson(needs.load-config.outputs.config).build.test_script || 'python -m pytest' }}
+      build_command: ${{ fromJson(needs.load-config.outputs.config).build.build_script || '' }}
       artifact_path: ${{ fromJson(needs.load-config.outputs.config).build.artifact_path || '' }}
 
   build-maven:
@@ -171,6 +175,8 @@ jobs:
       working_directory: ${{ fromJson(needs.load-config.outputs.config).project.working_directory || '.' }}
       java_version: ${{ fromJson(needs.load-config.outputs.config).project.version || '17' }}
       run_tests: ${{ fromJson(needs.load-config.outputs.config).build.run_tests != false }}
+      test_script: ${{ fromJson(needs.load-config.outputs.config).build.test_script || 'mvn test -B' }}
+      maven_args: ${{ fromJson(needs.load-config.outputs.config).build.build_script || '-B clean package -Dmaven.test.skip=true -Dcheckstyle.skip=true -Dpmd.skip=true -Dlicense.skip=true -Dmaven.antrun.skip=true' }}
       artifact_path: ${{ fromJson(needs.load-config.outputs.config).build.artifact_path || '' }}
 
   # ---------------------------------------------------------------------------

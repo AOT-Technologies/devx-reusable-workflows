@@ -108,6 +108,7 @@ jobs:
           if-no-files-found: ignore
 
       - name: Build Application
+        if: inputs.build_script != 'none' && inputs.build_script != ''
         run: ${{ inputs.build_script }}
 
       - name: Upload Build Artifact

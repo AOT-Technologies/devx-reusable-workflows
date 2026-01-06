@@ -35,6 +35,8 @@ project:
 
 build:
   run_tests: true             # Optional: run unit tests
+  test_script: ""             # Optional: custom test command
+  build_script: ""            # Optional: custom build command
   artifact_path: ""           # Optional: path to build output
 
 security:
@@ -143,9 +145,37 @@ build:
   run_tests: true  # Run tests
 ```
 
+#### `test_script` (Optional)
+**Type:** string  
+**Default:** 
+- Node: `npm test`
+- Python: `python -m pytest`
+- Maven: `mvn test -B`
+
+**Description:** Custom command to run tests.
+
 ```yaml
 build:
-  run_tests: false  # Skip tests (not recommended)
+  test_script: "npm run test:unit"  # Run specific test script
+```
+
+#### `build_script` (Optional)
+**Type:** string  
+**Default:** 
+- Node: `npm run build`
+- Python: `""` (none)
+- Maven: `-B clean package ...`
+
+**Description:** Custom command to build the application. Set to `none` to skip the build step.
+
+```yaml
+build:
+  build_script: "npm run build:prod"  # Custom build command
+```
+
+```yaml
+build:
+  build_script: "none"  # Skip build step entirely
 ```
 
 #### `artifact_path` (Optional)
@@ -797,112 +827,3 @@ security:
 docker:
   enabled: false  # Build locally
 ```
-
----
-
-### **Example 6: Production Environment (Strict)**
-
-```yaml
-project:
-  language: python
-  version: "3.11"
-
-build:
-  run_tests: true
-
-security:
-  sast:
-    enabled: true
-    severity: WARNING  # Stricter threshold
-    fail_on_findings: true  # Block on any findings
-  
-  iac:
-    enabled: true
-    soft_fail: false  # Block on IaC issues
-  
-  trivy:
-    enabled: true
-    severity: CRITICAL,HIGH,MEDIUM  # Include medium
-    fail_on_vuln: true  # Block on vulnerabilities
-  
-  sbom:
-    enabled: true
-  
-  sbom_scan:
-    enabled: true
-    severity: medium  # Strict SBOM scanning
-
-docker:
-  enabled: true
-  image_name: production-app
-  registry_type: ecr
-  platforms: linux/amd64,linux/arm64  # Multi-arch
-
-aws:
-  region: us-east-1
-  role_to_assume: arn:aws:iam::123456789012:role/ProdGitHubActionsRole
-```
-
----
-
-## 🎯 Configuration Best Practices
-
-### **1. Start Simple, Add Gradually**
-```yaml
-# Start with minimal config
-project:
-  language: node
-
-# Add security as you go
-security:
-  sast:
-    enabled: true
-
-# Add Docker when ready
-docker:
-  enabled: true
-  image_name: my-app
-```
-
-### **2. Use Different Configs for Different Environments**
-```
-devx-ci.yaml           # Production (strict)
-devx-ci.dev.yaml       # Development (lenient)
-devx-ci.staging.yaml   # Staging (moderate)
-```
-
-### **3. Document Your Overrides**
-```yaml
-security:
-  sast:
-    # We exclude tests/ because we use test-specific patterns
-    exclude_paths: "tests/"
-```
-
-### **4. Version Your Config**
-```yaml
-# Add version comment at top
-# devx-ci.yaml v1.2.0
-# Last updated: 2025-01-15
-
-project:
-  language: node
-```
-
----
-
-## 📝 Validation
-
-### **Required Field Validation**
-The orchestrator validates:
-- ✅ `project.language` is present and valid
-- ✅ `docker.image_name` is present if `docker.enabled=true`
-- ✅ `aws.role_to_assume` is present if `docker.registry_type=ecr`
-
-### **Schema Validation** (Coming Soon)
-```bash
-# Validate your config against schema
-yq -P devx-ci.yaml > /dev/null && echo "Valid YAML"
-```
-
----

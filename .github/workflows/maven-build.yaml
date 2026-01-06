@@ -130,6 +130,7 @@ jobs:
           if-no-files-found: ignore
 
       - name: Build with Maven
+        if: inputs.maven_args != 'none' && inputs.maven_args != ''
         run: mvn ${{ inputs.maven_args }} -f pom.xml
 
       - name: Upload Build Artifact
