@@ -1,11 +1,11 @@
 name: "Orchestrator: CI Pipeline"
 
 # ------------------------------------------------------------------------------
-# THE BRAIN.
+# THE BRAIN - ENTERPRISE EDITION
 # 1. Reads 'devx-ci.yaml'
-# 2. Parallelizes Security Gates (SAST, IaC)
-# 3. Routes to correct Language Build
-# 4. Chains Docker Build -> Trivy Scan -> SBOM
+# 2. Parallelizes Pre-Build Security Gates (SAST, IaC)
+# 3. Routes to Language-Specific Builds (Node/Python/Maven)
+# 4. Sequential Post-Build Security: Docker → Trivy → SBOM → SBOM-Scan
 # ------------------------------------------------------------------------------
 
 on:
@@ -22,17 +22,18 @@ on:
       registry_password:
         required: false
 
-# Prevent multiple runs on same ref
+# Prevent multiple runs on same ref (with smart cancellation)
 concurrency:
-  group: ${{ github.workflow }}-${{ github.ref }}
-  cancel-in-progress: true
+  group: ci-${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: ${{ github.ref != 'refs/heads/main' && github.ref != 'refs/heads/master' }}
+  # ^ Only cancel in-progress runs on PR/feature branches, not on main/master
 
 permissions:
   contents: read
-  security-events: write
-  actions: write
-  id-token: write
-  packages: write
+  security-events: write  # SARIF uploads
+  actions: write          # Artifact uploads
+  id-token: write         # AWS OIDC
+  packages: write         # GHCR push
 
 jobs:
   # ---------------------------------------------------------------------------
@@ -44,6 +45,7 @@ jobs:
     outputs:
       config: ${{ steps.parse.outputs.config }}
       language: ${{ steps.extract.outputs.language }}
+    
     steps:
       - name: Checkout Code
         uses: actions/checkout@v4.1.1
@@ -78,7 +80,7 @@ jobs:
             exit 1
           fi
           
-          echo "Config validation passed"
+          echo "✅ Config validation passed"
 
       # Parse config and set as output
       - name: Parse CI Config
@@ -94,10 +96,11 @@ jobs:
         run: |
           LANGUAGE=$(yq '.project.language' ${{ inputs.config_path }})
           echo "language=$LANGUAGE" >> $GITHUB_OUTPUT
-          echo "Detected language: $LANGUAGE"
+          echo "📋 Detected language: $LANGUAGE"
 
   # ---------------------------------------------------------------------------
   # 2. PRE-BUILD SECURITY GATES (Parallel)
+  # These run simultaneously as they analyze source code, not built artifacts
   # ---------------------------------------------------------------------------
   sast:
     needs: load-config
@@ -137,8 +140,9 @@ jobs:
       working_directory: ${{ fromJson(needs.load-config.outputs.config).project.working_directory || '.' }}
       node_version: ${{ fromJson(needs.load-config.outputs.config).project.version || '20' }}
       run_tests: ${{ fromJson(needs.load-config.outputs.config).build.run_tests != false }}
-      test_script: ${{ fromJson(needs.load-config.outputs.config).build.test_script || 'npm test' }}
-      build_script: ${{ fromJson(needs.load-config.outputs.config).build.build_script || 'npm run build' }}
+      test_script: ${{ fromJson(needs.load-config.outputs.config).build.test_script || 'test' }}
+      run_build: ${{ fromJson(needs.load-config.outputs.config).build.run_build == true }}
+      build_script: ${{ fromJson(needs.load-config.outputs.config).build.build_script || 'build' }}
       artifact_path: ${{ fromJson(needs.load-config.outputs.config).build.artifact_path || '' }}
 
   build-python:
@@ -208,8 +212,11 @@ jobs:
       platforms: ${{ fromJson(needs.load-config.outputs.config).docker.platforms || 'linux/amd64' }}
 
   # ---------------------------------------------------------------------------
-  # 5. POST-BUILD SECURITY
+  # 5. POST-BUILD SECURITY (SEQUENTIAL CHAIN)
+  # Docker → Trivy → SBOM → SBOM-Scan
   # ---------------------------------------------------------------------------
+  
+  # STEP 1: Container Vulnerability Scan (Fails fast on CRITICAL CVEs)
   trivy:
     needs: [load-config, docker]
     if: |
@@ -222,19 +229,26 @@ jobs:
       image_uri: ${{ needs.docker.outputs.image_uri }}
       severity_threshold: ${{ fromJson(needs.load-config.outputs.config).security.trivy.severity || 'CRITICAL,HIGH' }}
       fail_on_vuln: ${{ fromJson(needs.load-config.outputs.config).security.trivy.fail_on_vuln != false }}
+      ignore_unfixed: ${{ fromJson(needs.load-config.outputs.config).security.trivy.ignore_unfixed != false }}
+      scanners: ${{ fromJson(needs.load-config.outputs.config).security.trivy.scanners || 'vuln,secret,misconfig' }}
+      output_format: sarif
 
+  # STEP 2: SBOM Generation (Only if Trivy passes or is skipped)
   sbom:
-    needs: [load-config, docker]
+    needs: [load-config, docker, trivy]
     if: |
       always() &&
       fromJson(needs.load-config.outputs.config).security.sbom.enabled == true &&
-      needs.docker.result == 'success'
+      needs.docker.result == 'success' &&
+      (needs.trivy.result == 'success' || needs.trivy.result == 'skipped')
     uses: ./.github/workflows/sbom-generate.yaml
     with:
       sbom_type: image
       image_uri: ${{ needs.docker.outputs.image_uri }}
       format: ${{ fromJson(needs.load-config.outputs.config).security.sbom.format || 'cyclonedx-json' }}
+      upload_artifact: true
 
+  # STEP 3: SBOM CVE Scan (Dependency-level vulnerabilities)
   sbom-scan:
     needs: [load-config, sbom]
     if: |
@@ -248,30 +262,74 @@ jobs:
       output_format: ${{ fromJson(needs.load-config.outputs.config).security.sbom_scan.format || 'sarif' }}
 
   # ---------------------------------------------------------------------------
-  # 6. PIPELINE SUMMARY (Always runs)
+  # 6. PIPELINE SUMMARY (Always runs for observability)
   # ---------------------------------------------------------------------------
   summary:
     if: always()
     needs: [load-config, sast, iac, build-node, build-python, build-maven, docker, trivy, sbom, sbom-scan]
     runs-on: ubuntu-latest
     timeout-minutes: 2
+    
     steps:
       - name: Generate Pipeline Summary
         run: |
-          echo "## CI Pipeline Summary" >> $GITHUB_STEP_SUMMARY
+          echo "## 🔐 Enterprise CI Pipeline Summary" >> $GITHUB_STEP_SUMMARY
           echo "" >> $GITHUB_STEP_SUMMARY
+          
+          # Configuration Info
+          echo "### 📋 Configuration" >> $GITHUB_STEP_SUMMARY
+          echo "- **Language:** ${{ needs.load-config.outputs.language }}" >> $GITHUB_STEP_SUMMARY
+          echo "- **Commit:** \`${{ github.sha }}\`" >> $GITHUB_STEP_SUMMARY
+          echo "- **Branch:** \`${{ github.ref_name }}\`" >> $GITHUB_STEP_SUMMARY
+          echo "- **Triggered by:** ${{ github.event_name }}" >> $GITHUB_STEP_SUMMARY
+          echo "" >> $GITHUB_STEP_SUMMARY
+          
+          # Pipeline Stages
+          echo "### 📊 Pipeline Stages" >> $GITHUB_STEP_SUMMARY
           echo "| Stage | Status |" >> $GITHUB_STEP_SUMMARY
           echo "|-------|--------|" >> $GITHUB_STEP_SUMMARY
-          echo "| Config Load | ${{ needs.load-config.result }} |" >> $GITHUB_STEP_SUMMARY
-          echo "| SAST Scan | ${{ needs.sast.result }} |" >> $GITHUB_STEP_SUMMARY
-          echo "| IaC Scan | ${{ needs.iac.result }} |" >> $GITHUB_STEP_SUMMARY
-          echo "| Node Build | ${{ needs.build-node.result }} |" >> $GITHUB_STEP_SUMMARY
-          echo "| Python Build | ${{ needs.build-python.result }} |" >> $GITHUB_STEP_SUMMARY
-          echo "| Maven Build | ${{ needs.build-maven.result }} |" >> $GITHUB_STEP_SUMMARY
-          echo "| Docker Build | ${{ needs.docker.result }} |" >> $GITHUB_STEP_SUMMARY
-          echo "| Trivy Scan | ${{ needs.trivy.result }} |" >> $GITHUB_STEP_SUMMARY
-          echo "| SBOM Generation | ${{ needs.sbom.result }} |" >> $GITHUB_STEP_SUMMARY
-          echo "| SBOM Scan | ${{ needs.sbom-scan.result }} |" >> $GITHUB_STEP_SUMMARY
+          echo "| **Pre-Build** | |" >> $GITHUB_STEP_SUMMARY
+          echo "| ├─ Config Validation | ${{ needs.load-config.result }} |" >> $GITHUB_STEP_SUMMARY
+          echo "| ├─ SAST Scan | ${{ needs.sast.result }} |" >> $GITHUB_STEP_SUMMARY
+          echo "| └─ IaC Scan | ${{ needs.iac.result }} |" >> $GITHUB_STEP_SUMMARY
+          echo "| **Build** | |" >> $GITHUB_STEP_SUMMARY
+          echo "| ├─ Node.js Build | ${{ needs.build-node.result }} |" >> $GITHUB_STEP_SUMMARY
+          echo "| ├─ Python Build | ${{ needs.build-python.result }} |" >> $GITHUB_STEP_SUMMARY
+          echo "| └─ Maven Build | ${{ needs.build-maven.result }} |" >> $GITHUB_STEP_SUMMARY
+          echo "| **Container** | |" >> $GITHUB_STEP_SUMMARY
+          echo "| └─ Docker Build | ${{ needs.docker.result }} |" >> $GITHUB_STEP_SUMMARY
+          echo "| **Post-Build Security (Sequential)** | |" >> $GITHUB_STEP_SUMMARY
+          echo "| ├─ 1️⃣ Trivy Scan | ${{ needs.trivy.result }} |" >> $GITHUB_STEP_SUMMARY
+          echo "| ├─ 2️⃣ SBOM Generation | ${{ needs.sbom.result }} |" >> $GITHUB_STEP_SUMMARY
+          echo "| └─ 3️⃣ SBOM CVE Scan | ${{ needs.sbom-scan.result }} |" >> $GITHUB_STEP_SUMMARY
           echo "" >> $GITHUB_STEP_SUMMARY
-          echo "**Language Detected:** ${{ needs.load-config.outputs.language }}" >> $GITHUB_STEP_SUMMARY
-          echo "**Commit SHA:** ${{ github.sha }}" >> $GITHUB_STEP_SUMMARY
+          
+          # Overall Status
+          if [[ "${{ contains(needs.*.result, 'failure') }}" == "true" ]]; then
+            echo "### ❌ Pipeline Status: **FAILED**" >> $GITHUB_STEP_SUMMARY
+            echo "" >> $GITHUB_STEP_SUMMARY
+            echo "One or more stages failed. Please review the logs above." >> $GITHUB_STEP_SUMMARY
+          elif [[ "${{ contains(needs.*.result, 'cancelled') }}" == "true" ]]; then
+            echo "### ⚠️ Pipeline Status: **CANCELLED**" >> $GITHUB_STEP_SUMMARY
+            echo "" >> $GITHUB_STEP_SUMMARY
+            echo "Pipeline was cancelled. This may be due to a newer commit being pushed." >> $GITHUB_STEP_SUMMARY
+          else
+            echo "### ✅ Pipeline Status: **SUCCESS**" >> $GITHUB_STEP_SUMMARY
+            echo "" >> $GITHUB_STEP_SUMMARY
+            echo "All enabled stages completed successfully!" >> $GITHUB_STEP_SUMMARY
+          fi
+          
+          # Docker Image Info (if built)
+          if [[ "${{ needs.docker.result }}" == "success" ]]; then
+            echo "" >> $GITHUB_STEP_SUMMARY
+            echo "### 🐳 Container Image" >> $GITHUB_STEP_SUMMARY
+            echo "Image URI: \`${{ needs.docker.outputs.image_uri }}\`" >> $GITHUB_STEP_SUMMARY
+          fi
+
+      # Set final job status
+      - name: Evaluate Final Status
+        run: |
+          if [[ "${{ contains(needs.*.result, 'failure') }}" == "true" ]]; then
+            echo "::error::Pipeline failed - one or more stages reported failure"
+            exit 1
+          fi
