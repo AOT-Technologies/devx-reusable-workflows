@@ -8,6 +8,9 @@ name: "Module: SAST Scan (Semgrep)"
 # - Policy-driven fail-fast
 # - SARIF reporting
 #
+# Conditions:
+# - Code Security must be enabled for this repository to use code scanning (Code Security features are free for public repositories and billed for per 90-day active committer for private and internal repositories)
+#
 # POLICY GATE:
 # - fail_on_findings = true  → pipeline fails on findings
 # - fail_on_findings = false → audit mode (report only)
