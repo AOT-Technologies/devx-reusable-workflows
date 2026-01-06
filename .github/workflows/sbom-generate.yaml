@@ -1,11 +1,6 @@
 name: "Module: SBOM Generation (Syft)"
 # ------------------------------------------------------------------------------
 # Software Bill of Materials (SBOM) generation using Syft.
-#
-# CAPABILITIES:
-# - Inventory Only (No enforcement, never breaks builds)
-# - Dual Mode: Source (Filesystem) & Container (Image)
-# - CycloneDX & SPDX Standard Output
 # ------------------------------------------------------------------------------
 
 on:
@@ -24,6 +19,16 @@ on:
         default: "."
       image_uri:
         description: "Full container image URI (for image mode)"
+        type: string
+        default: ""
+
+      # --- AWS AUTHENTICATION (for ECR images) ---
+      aws_region:
+        description: "AWS region for ECR authentication"
+        type: string
+        default: "ca-central-1"
+      role_to_assume:
+        description: "AWS IAM role ARN for OIDC authentication"
         type: string
         default: ""
 
@@ -62,6 +67,14 @@ on:
         description: "Image URI (image mode)"
         type: string
         default: ""
+      aws_region:
+        description: "AWS region"
+        type: string
+        default: "ca-central-1"
+      role_to_assume:
+        description: "AWS IAM role ARN"
+        type: string
+        default: ""
       format:
         description: "Output format"
         type: choice
@@ -78,7 +91,8 @@ on:
 
 permissions:
   contents: read
-  actions: write   # Required to upload artifacts
+  actions: write     # Required to upload artifacts
+  id-token: write    # Required for AWS OIDC
 
 jobs:
   sbom-generate:
@@ -116,18 +130,42 @@ jobs:
             echo "::error::Supported formats: cyclonedx-json, cyclonedx-xml, spdx-json, spdx-tag-value"
             exit 1
           fi
+          
+          # Check if image is from ECR
+          if [[ "${{ inputs.sbom_type }}" == "image" && "${{ inputs.image_uri }}" == *".dkr.ecr."* ]]; then
+            echo "ECR_IMAGE=true" >> $GITHUB_ENV
+            echo "📦 Detected ECR image, will authenticate"
+          else
+            echo "ECR_IMAGE=false" >> $GITHUB_ENV
+          fi
 
       # ------------------------------------------------------------------------
-      # SETUP
+      # AWS AUTHENTICATION (for ECR images only)
+      # ------------------------------------------------------------------------
+      - name: Configure AWS Credentials (ECR)
+        if: env.ECR_IMAGE == 'true' && inputs.role_to_assume != ''
+        uses: aws-actions/configure-aws-credentials@v4
+        with:
+          role-to-assume: ${{ inputs.role_to_assume }}
+          aws-region: ${{ inputs.aws_region }}
+          role-session-name: sbom-generation-session
+
+      - name: Login to Amazon ECR
+        if: env.ECR_IMAGE == 'true' && inputs.role_to_assume != ''
+        uses: aws-actions/amazon-ecr-login@v2
+        with:
+          mask-password: true
+
+      # ------------------------------------------------------------------------
+      # SETUP SYFT
       # ------------------------------------------------------------------------
       - name: Install Syft
         uses: anchore/sbom-action/download-syft@v0.16.0
 
-      - name: Update Vulnerability Database
+      - name: Verify Syft Installation
         run: |
-          echo "Updating Syft vulnerability database..."
-          syft db update
-          syft db status
+          syft version
+          echo "✅ Syft installed successfully"
 
       # ------------------------------------------------------------------------
       # MODE 1: FILESYSTEM SBOM
@@ -136,22 +174,57 @@ jobs:
         timeout-minutes: 10
         if: inputs.sbom_type == 'fs'
         run: |
-          echo "Generating filesystem SBOM for: ${{ inputs.scan_path }}"
+          echo "📋 Generating filesystem SBOM for: ${{ inputs.scan_path }}"
           syft dir:${{ inputs.scan_path }} \
             -o ${{ inputs.format }} \
             > sbom-${{ github.sha }}.json
+          echo "✅ SBOM generated successfully"
 
       # ------------------------------------------------------------------------
-      # MODE 2: IMAGE SBOM
+      # MODE 2: IMAGE SBOM (with authentication support)
       # ------------------------------------------------------------------------
+      - name: Pull Image for SBOM
+        if: inputs.sbom_type == 'image'
+        run: |
+          echo "📦 Pulling image for SBOM generation: ${{ inputs.image_uri }}"
+          docker pull ${{ inputs.image_uri }}
+          echo "✅ Image pulled successfully"
+
       - name: Generate SBOM (Image)
         timeout-minutes: 10
         if: inputs.sbom_type == 'image'
         run: |
-          echo "Generating image SBOM for: ${{ inputs.image_uri }}"
+          echo "📋 Generating image SBOM for: ${{ inputs.image_uri }}"
           syft ${{ inputs.image_uri }} \
             -o ${{ inputs.format }} \
             > sbom-${{ github.sha }}.json
+          echo "✅ SBOM generated successfully"
+
+      # ------------------------------------------------------------------------
+      # SBOM VALIDATION
+      # ------------------------------------------------------------------------
+      - name: Validate SBOM
+        run: |
+          if [[ ! -f "sbom-${{ github.sha }}.json" ]]; then
+            echo "::error::SBOM file not generated"
+            exit 1
+          fi
+          
+          # Check file size
+          SBOM_SIZE=$(stat -f%z "sbom-${{ github.sha }}.json" 2>/dev/null || stat -c%s "sbom-${{ github.sha }}.json")
+          echo "📊 SBOM size: $SBOM_SIZE bytes"
+          
+          if [[ $SBOM_SIZE -lt 100 ]]; then
+            echo "::error::SBOM file is suspiciously small ($SBOM_SIZE bytes)"
+            cat "sbom-${{ github.sha }}.json"
+            exit 1
+          fi
+          
+          # Count components
+          if command -v jq &> /dev/null; then
+            COMPONENT_COUNT=$(jq '[.components[]?, .packages[]?] | length' sbom-${{ github.sha }}.json 2>/dev/null || echo "unknown")
+            echo "📦 Components found: $COMPONENT_COUNT"
+          fi
 
       # ------------------------------------------------------------------------
       # ARTIFACT OUTPUT
@@ -162,7 +235,7 @@ jobs:
         with:
           name: sbom-${{ github.sha }}
           path: sbom-${{ github.sha }}.json
-          retention-days: 180 # 6 Months Retention for Audit
+          retention-days: 180  # 6 Months Retention for Audit
 
       - name: Set Output
         id: set_output
@@ -171,4 +244,33 @@ jobs:
             echo "artifact_name=sbom-${{ github.sha }}" >> $GITHUB_OUTPUT
           else
             echo "artifact_name=" >> $GITHUB_OUTPUT
+          fi
+
+      # ------------------------------------------------------------------------
+      # SUMMARY
+      # ------------------------------------------------------------------------
+      - name: Generate SBOM Summary
+        if: always()
+        run: |
+          echo "## 📋 SBOM Generation Summary" >> $GITHUB_STEP_SUMMARY
+          echo "" >> $GITHUB_STEP_SUMMARY
+          echo "- **Type:** ${{ inputs.sbom_type }}" >> $GITHUB_STEP_SUMMARY
+          if [[ "${{ inputs.sbom_type }}" == "image" ]]; then
+            echo "- **Image:** \`${{ inputs.image_uri }}\`" >> $GITHUB_STEP_SUMMARY
+          else
+            echo "- **Path:** ${{ inputs.scan_path }}" >> $GITHUB_STEP_SUMMARY
+          fi
+          echo "- **Format:** ${{ inputs.format }}" >> $GITHUB_STEP_SUMMARY
+          echo "" >> $GITHUB_STEP_SUMMARY
+          
+          if [[ -f "sbom-${{ github.sha }}.json" ]]; then
+            SBOM_SIZE=$(stat -f%z "sbom-${{ github.sha }}.json" 2>/dev/null || stat -c%s "sbom-${{ github.sha }}.json")
+            echo "✅ SBOM generated successfully ($SBOM_SIZE bytes)" >> $GITHUB_STEP_SUMMARY
+            
+            if command -v jq &> /dev/null; then
+              COMPONENT_COUNT=$(jq '[.components[]?, .packages[]?] | length' sbom-${{ github.sha }}.json 2>/dev/null || echo "unknown")
+              echo "- **Components:** $COMPONENT_COUNT" >> $GITHUB_STEP_SUMMARY
+            fi
+          else
+            echo "❌ SBOM generation failed" >> $GITHUB_STEP_SUMMARY
           fi

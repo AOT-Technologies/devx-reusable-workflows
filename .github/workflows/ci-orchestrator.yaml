@@ -227,6 +227,10 @@ jobs:
     with:
       scan_type: image
       image_uri: ${{ needs.docker.outputs.image_uri }}
+      # AWS credentials for ECR access
+      aws_region: ${{ fromJson(needs.load-config.outputs.config).aws.region || 'us-east-1' }}
+      role_to_assume: ${{ fromJson(needs.load-config.outputs.config).aws.role_to_assume || '' }}
+      # Scan configuration
       severity_threshold: ${{ fromJson(needs.load-config.outputs.config).security.trivy.severity || 'CRITICAL,HIGH' }}
       fail_on_vuln: ${{ fromJson(needs.load-config.outputs.config).security.trivy.fail_on_vuln != false }}
       ignore_unfixed: ${{ fromJson(needs.load-config.outputs.config).security.trivy.ignore_unfixed != false }}
@@ -245,6 +249,10 @@ jobs:
     with:
       sbom_type: image
       image_uri: ${{ needs.docker.outputs.image_uri }}
+      # AWS credentials for ECR access
+      aws_region: ${{ fromJson(needs.load-config.outputs.config).aws.region || 'us-east-1' }}
+      role_to_assume: ${{ fromJson(needs.load-config.outputs.config).aws.role_to_assume || '' }}
+      # SBOM configuration
       format: ${{ fromJson(needs.load-config.outputs.config).security.sbom.format || 'cyclonedx-json' }}
       upload_artifact: true
 
