@@ -39,7 +39,7 @@ devx-reusable-workflows/
 │   ├── python-build.yaml
 │   ├── maven-build.yaml
 │   ├── docker-build.yaml       # Universal container builder
-│   ├── sast-scan.yaml          # Security modules
+│   ├── sast-semgrep.yaml          # Security modules
 │   ├── iac-scan.yaml
 │   ├── trivy-scan.yaml
 │   ├── sbom-generate.yaml

@@ -804,7 +804,7 @@ on: workflow_dispatch
 
 jobs:
   sast:
-    uses: AOT-Technologies/devx-reusable-workflows/.github/workflows/sast-scan.yaml@v1
+    uses: AOT-Technologies/devx-reusable-workflows/.github/workflows/sast-semgrep.yaml@v1
     with:
       scan_path: "."
       fail_on_findings: false

@@ -1,9 +1,9 @@
 name: "Orchestrator: CI Pipeline"
 
 # ------------------------------------------------------------------------------
-# THE BRAIN - ENTERPRISE EDITION
+# THE BRAIN
 # 1. Reads 'devx-ci.yaml'
-# 2. Parallelizes Pre-Build Security Gates (SAST, IaC)
+# 2. Parallelizes Pre-Build Security Gates (SAST: Semgrep or SonarQube, IaC)
 # 3. Routes to Language-Specific Builds (Node/Python/Maven)
 # 4. Sequential Post-Build Security: Docker → Trivy → SBOM → SBOM-Scan
 # ------------------------------------------------------------------------------
@@ -21,6 +21,8 @@ on:
         required: false
       registry_password:
         required: false
+      sonar_token:
+        required: false
 
 # Prevent multiple runs on same ref (with smart cancellation)
 concurrency:
@@ -34,6 +36,7 @@ permissions:
   actions: write          # Artifact uploads
   id-token: write         # AWS OIDC
   packages: write         # GHCR push
+  pull-requests: write    # SonarQube PR decoration
 
 jobs:
   # ---------------------------------------------------------------------------
@@ -45,6 +48,7 @@ jobs:
     outputs:
       config: ${{ steps.parse.outputs.config }}
       language: ${{ steps.extract.outputs.language }}
+      sast_tool: ${{ steps.extract.outputs.sast_tool }}
     
     steps:
       - name: Checkout Code
@@ -97,20 +101,45 @@ jobs:
           LANGUAGE=$(yq '.project.language' ${{ inputs.config_path }})
           echo "language=$LANGUAGE" >> $GITHUB_OUTPUT
           echo "📋 Detected language: $LANGUAGE"
+          
+          # Detect SAST tool (default: semgrep)
+          SAST_TOOL=$(yq '.security.sast.tool // "semgrep"' ${{ inputs.config_path }})
+          echo "sast_tool=$SAST_TOOL" >> $GITHUB_OUTPUT
+          echo "🔍 SAST tool: $SAST_TOOL"
 
   # ---------------------------------------------------------------------------
-  # 2. PRE-BUILD SECURITY GATES (Parallel)
-  # These run simultaneously as they analyze source code, not built artifacts
+  # 2. PRE-BUILD SECURITY GATES (Parallel) - MULTI-SAST SUPPORT
   # ---------------------------------------------------------------------------
-  sast:
+  
+  # Option A: Semgrep (Default, Free, Fast)
+  sast-semgrep:
     needs: load-config
-    if: fromJson(needs.load-config.outputs.config).security.sast.enabled == true
-    uses: ./.github/workflows/sast-scan.yaml
+    if: |
+      fromJson(needs.load-config.outputs.config).security.sast.enabled == true &&
+      needs.load-config.outputs.sast_tool == 'semgrep'
+    uses: ./.github/workflows/sast-semgrep.yaml
     with:
       scan_path: ${{ fromJson(needs.load-config.outputs.config).security.sast.scan_path || '.' }}
       exclude_paths: ${{ fromJson(needs.load-config.outputs.config).security.sast.exclude_paths || '' }}
       severity_threshold: ${{ fromJson(needs.load-config.outputs.config).security.sast.severity || 'ERROR' }}
       fail_on_findings: ${{ fromJson(needs.load-config.outputs.config).security.sast.fail_on_findings != false }}
+
+  # Option B: SonarQube (Enterprise, Comprehensive)
+  sast-sonarqube:
+    needs: load-config
+    if: |
+      fromJson(needs.load-config.outputs.config).security.sast.enabled == true &&
+      needs.load-config.outputs.sast_tool == 'sonarqube'
+    uses: ./.github/workflows/sast-sonarqube.yaml
+    secrets:
+      sonar_token: ${{ secrets.sonar_token }}
+    with:
+      scan_path: ${{ fromJson(needs.load-config.outputs.config).security.sast.scan_path || '.' }}
+      sonar_host_url: ${{ fromJson(needs.load-config.outputs.config).security.sast.sonar_host_url || 'https://sonarcloud.io' }}
+      sonar_organization: ${{ fromJson(needs.load-config.outputs.config).security.sast.sonar_organization || '' }}
+      sonar_project_key: ${{ fromJson(needs.load-config.outputs.config).security.sast.sonar_project_key }}
+      fail_on_quality_gate: ${{ fromJson(needs.load-config.outputs.config).security.sast.fail_on_quality_gate != false }}
+      coverage_report_path: ${{ fromJson(needs.load-config.outputs.config).security.sast.coverage_report_path || '' }}
 
   iac:
     needs: load-config
@@ -126,11 +155,12 @@ jobs:
   # Explicit security gate validation - prevents bypass when gates are skipped
   # ---------------------------------------------------------------------------
   build-node:
-    needs: [load-config, sast, iac]
+    needs: [load-config, sast-semgrep, sast-sonarqube, iac]
     if: |
       always() &&
       needs.load-config.result == 'success' &&
-      (needs.sast.result == 'success' || needs.sast.result == 'skipped') &&
+      (needs.sast-semgrep.result == 'success' || needs.sast-semgrep.result == 'skipped') &&
+      (needs.sast-sonarqube.result == 'success' || needs.sast-sonarqube.result == 'skipped') &&
       (needs.iac.result == 'success' || needs.iac.result == 'skipped') &&
       !contains(needs.*.result, 'failure') &&
       !contains(needs.*.result, 'cancelled') &&
@@ -146,11 +176,12 @@ jobs:
       artifact_path: ${{ fromJson(needs.load-config.outputs.config).build.artifact_path || '' }}
 
   build-python:
-    needs: [load-config, sast, iac]
+    needs: [load-config, sast-semgrep, sast-sonarqube, iac]
     if: |
       always() &&
       needs.load-config.result == 'success' &&
-      (needs.sast.result == 'success' || needs.sast.result == 'skipped') &&
+      (needs.sast-semgrep.result == 'success' || needs.sast-semgrep.result == 'skipped') &&
+      (needs.sast-sonarqube.result == 'success' || needs.sast-sonarqube.result == 'skipped') &&
       (needs.iac.result == 'success' || needs.iac.result == 'skipped') &&
       !contains(needs.*.result, 'failure') &&
       !contains(needs.*.result, 'cancelled') &&
@@ -165,11 +196,12 @@ jobs:
       artifact_path: ${{ fromJson(needs.load-config.outputs.config).build.artifact_path || '' }}
 
   build-maven:
-    needs: [load-config, sast, iac]
+    needs: [load-config, sast-semgrep, sast-sonarqube, iac]
     if: |
       always() &&
       needs.load-config.result == 'success' &&
-      (needs.sast.result == 'success' || needs.sast.result == 'skipped') &&
+      (needs.sast-semgrep.result == 'success' || needs.sast-semgrep.result == 'skipped') &&
+      (needs.sast-sonarqube.result == 'success' || needs.sast-sonarqube.result == 'skipped') &&
       (needs.iac.result == 'success' || needs.iac.result == 'skipped') &&
       !contains(needs.*.result, 'failure') &&
       !contains(needs.*.result, 'cancelled') &&
@@ -180,7 +212,7 @@ jobs:
       java_version: ${{ fromJson(needs.load-config.outputs.config).project.version || '17' }}
       run_tests: ${{ fromJson(needs.load-config.outputs.config).build.run_tests != false }}
       test_script: ${{ fromJson(needs.load-config.outputs.config).build.test_script || 'mvn test -B' }}
-      maven_args: ${{ fromJson(needs.load-config.outputs.config).build.build_script || '-B clean package -Dmaven.test.skip=true -Dcheckstyle.skip=true -Dpmd.skip=true -Dlicense.skip=true -Dmaven.antrun.skip=true' }}
+      maven_args: ${{ fromJson(needs.load-config.outputs.config).build.build_script || '-B clean package -DskipTests' }}
       artifact_path: ${{ fromJson(needs.load-config.outputs.config).build.artifact_path || '' }}
 
   # ---------------------------------------------------------------------------
@@ -274,19 +306,20 @@ jobs:
   # ---------------------------------------------------------------------------
   summary:
     if: always()
-    needs: [load-config, sast, iac, build-node, build-python, build-maven, docker, trivy, sbom, sbom-scan]
+    needs: [load-config, sast-semgrep, sast-sonarqube, iac, build-node, build-python, build-maven, docker, trivy, sbom, sbom-scan]
     runs-on: ubuntu-latest
     timeout-minutes: 2
     
     steps:
       - name: Generate Pipeline Summary
         run: |
-          echo "## CI Pipeline Summary" >> $GITHUB_STEP_SUMMARY
+          echo "## 🔐 Enterprise CI Pipeline Summary" >> $GITHUB_STEP_SUMMARY
           echo "" >> $GITHUB_STEP_SUMMARY
           
           # Configuration Info
           echo "### 📋 Configuration" >> $GITHUB_STEP_SUMMARY
           echo "- **Language:** ${{ needs.load-config.outputs.language }}" >> $GITHUB_STEP_SUMMARY
+          echo "- **SAST Tool:** ${{ needs.load-config.outputs.sast_tool }}" >> $GITHUB_STEP_SUMMARY
           echo "- **Commit:** \`${{ github.sha }}\`" >> $GITHUB_STEP_SUMMARY
           echo "- **Branch:** \`${{ github.ref_name }}\`" >> $GITHUB_STEP_SUMMARY
           echo "- **Triggered by:** ${{ github.event_name }}" >> $GITHUB_STEP_SUMMARY
@@ -298,7 +331,8 @@ jobs:
           echo "|-------|--------|" >> $GITHUB_STEP_SUMMARY
           echo "| **Pre-Build** | |" >> $GITHUB_STEP_SUMMARY
           echo "| ├─ Config Validation | ${{ needs.load-config.result }} |" >> $GITHUB_STEP_SUMMARY
-          echo "| ├─ SAST Scan | ${{ needs.sast.result }} |" >> $GITHUB_STEP_SUMMARY
+          echo "| ├─ SAST (Semgrep) | ${{ needs.sast-semgrep.result }} |" >> $GITHUB_STEP_SUMMARY
+          echo "| ├─ SAST (SonarQube) | ${{ needs.sast-sonarqube.result }} |" >> $GITHUB_STEP_SUMMARY
           echo "| └─ IaC Scan | ${{ needs.iac.result }} |" >> $GITHUB_STEP_SUMMARY
           echo "| **Build** | |" >> $GITHUB_STEP_SUMMARY
           echo "| ├─ Node.js Build | ${{ needs.build-node.result }} |" >> $GITHUB_STEP_SUMMARY

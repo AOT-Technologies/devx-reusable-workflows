@@ -178,7 +178,7 @@ git push
 ### **Security Modules**
 | Workflow | Tool | Scans |
 |----------|------|-------|
-| `sast-scan.yaml` | Semgrep | Code vulnerabilities, secrets, best practices |
+| `sast-semgrep.yaml` | Semgrep | Code vulnerabilities, secrets, best practices |
 | `iac-scan.yaml` | Checkov | Terraform, K8s, CloudFormation misconfigurations |
 | `trivy-scan.yaml` | Trivy | OS packages, dependencies, misconfigurations |
 | `sbom-generate.yaml` | Syft | Software Bill of Materials generation |

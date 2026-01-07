@@ -108,7 +108,7 @@ docker-build:
 #### **Audit Mode (Don't Block on Findings)**
 ```yaml
 sast-scan:
-  uses: AOT-Technologies/devx-reusable-workflows/.github/workflows/sast-scan.yaml@main
+  uses: AOT-Technologies/devx-reusable-workflows/.github/workflows/sast-semgrep.yaml@main
   with:
     fail_on_findings: false  # Report only, don't block
 ```
@@ -135,7 +135,7 @@ jobs:
     uses: .../node-build.yaml@main
   
   sast:
-    uses: .../sast-scan.yaml@main
+    uses: .../sast-semgrep.yaml@main
   
   trivy:
     uses: .../trivy-scan.yaml@main
@@ -150,7 +150,7 @@ jobs:
 
   security:
     needs: build
-    uses: .../sast-scan.yaml@main
+    uses: .../sast-semgrep.yaml@main
 
   docker:
     needs: security
