@@ -189,7 +189,7 @@ jobs:
           # Determine SonarQube command based on host
           if [[ "${{ inputs.sonar_host_url }}" == "https://sonarcloud.io" ]]; then
             echo "Using SonarCloud..."
-            mvn clean verify sonar:sonar \
+            mvn clean verify org.sonarsource.scanner.maven:sonar-maven-plugin:sonar \
               -Dsonar.host.url=${{ inputs.sonar_host_url }} \
               -Dsonar.organization=${{ inputs.sonar_organization }} \
               -Dsonar.projectKey=${{ inputs.sonar_project_key }} \
@@ -199,7 +199,7 @@ jobs:
               -B
           else
             echo "Using Self-hosted SonarQube..."
-            mvn clean verify sonar:sonar \
+            mvn clean verify org.sonarsource.scanner.maven:sonar-maven-plugin:sonar \
               -Dsonar.host.url=${{ inputs.sonar_host_url }} \
               -Dsonar.projectKey=${{ inputs.sonar_project_key }} \
               -Dsonar.token=${{ secrets.sonar_token }} \
