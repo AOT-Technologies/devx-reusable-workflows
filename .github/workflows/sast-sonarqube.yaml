@@ -194,7 +194,6 @@ jobs:
               -Dsonar.organization=${{ inputs.sonar_organization }} \
               -Dsonar.projectKey=${{ inputs.sonar_project_key }} \
               -Dsonar.token=${{ secrets.sonar_token }} \
-              -Dsonar.sources=${{ inputs.scan_path }} \
               ${{ inputs.additional_args }} \
               -B
           else
@@ -203,7 +202,6 @@ jobs:
               -Dsonar.host.url=${{ inputs.sonar_host_url }} \
               -Dsonar.projectKey=${{ inputs.sonar_project_key }} \
               -Dsonar.token=${{ secrets.sonar_token }} \
-              -Dsonar.sources=${{ inputs.scan_path }} \
               ${{ inputs.additional_args }} \
               -B
           fi
