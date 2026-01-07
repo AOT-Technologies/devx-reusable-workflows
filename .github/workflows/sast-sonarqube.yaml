@@ -230,6 +230,53 @@ jobs:
             -Dsonar.sources=${{ inputs.scan_path }}
             -Dsonar.verbose=false
             ${{ inputs.coverage_report_path != '' && format('-Dsonar.coverageReportPaths={0}', inputs.coverage_report_path) || '' }}
+            ${{ inputs.additional_args }}
+
+      - name: SonarQube Scan (Self-Hosted)
+        if: |
+          inputs.sonar_host_url != 'https://sonarcloud.io' &&
+          steps.detect_lang.outputs.language != 'maven'
+        uses: sonarsource/sonarqube-scan-action@master
+        env:
+          SONAR_TOKEN: ${{ secrets.sonar_token }}
+          SONAR_HOST_URL: ${{ inputs.sonar_host_url }}
+        with:
+          args: >
+            -Dsonar.projectKey=${{ inputs.sonar_project_key }}
+            -Dsonar.sources=${{ inputs.scan_path }}
+            ${{ inputs.coverage_report_path != '' && format('-Dsonar.coverageReportPaths={0}', inputs.coverage_report_path) || '' }}
+            ${{ inputs.additional_args }}
+
+      # ------------------------------------------------------------------------
+      # 5. QUALITY GATE CHECK
+      # ------------------------------------------------------------------------
+      - name: Determine Quality Gate Report Path
+        id: qg_report
+        run: |
+          if [[ "${{ steps.detect_lang.outputs.language }}" == "maven" ]]; then
+            echo "report_path=target/sonar/report-task.txt" >> $GITHUB_OUTPUT
+          else
+            echo "report_path=.scannerwork/report-task.txt" >> $GITHUB_OUTPUT
+          fi
+
+      - name: Wait for Quality Gate
+        if: inputs.wait_for_quality_gate == true
+        uses: sonarsource/sonarqube-quality-gate-action@master
+        timeout-minutes: 5
+        with:
+          scanMetadataReportFile: ${{ steps.qg_report.outputs.report_path }}
+        env:
+          SONAR_TOKEN: ${{ secrets.sonar_token }}
+          SONAR_HOST_URL: ${{ inputs.sonar_host_url }}
+        continue-on-error: ${{ !inputs.fail_on_quality_gate }}
+
+      # ------------------------------------------------------------------------
+      # 6. SUMMARY & REPORTING
+      # ------------------------------------------------------------------------
+      - name: Generate Scan Summary
+        if: always()
+        run: |
+          echo "## 🔍 SonarQube SAST Scan Results" >> $GITHUB_STEP_SUMMARY
           echo "" >> $GITHUB_STEP_SUMMARY
           echo "- **Project Key:** ${{ inputs.sonar_project_key }}" >> $GITHUB_STEP_SUMMARY
           echo "- **Server:** ${{ inputs.sonar_host_url }}" >> $GITHUB_STEP_SUMMARY
