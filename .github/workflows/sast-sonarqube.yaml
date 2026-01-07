@@ -176,6 +176,45 @@ jobs:
           mvn clean verify -B || true
 
       # ------------------------------------------------------------------------
+      # 4. SONARQUBE SCAN - MAVEN-SPECIFIC
+      # ------------------------------------------------------------------------
+      - name: Run SonarQube Analysis (Maven)
+        if: steps.detect_lang.outputs.language == 'maven'
+        env:
+          SONAR_TOKEN: ${{ secrets.sonar_token }}
+          SONAR_HOST_URL: ${{ inputs.sonar_host_url }}
+        run: |
+          echo "🔍 Running SonarQube analysis via Maven plugin..."
+          
+          # Determine SonarQube command based on host
+          if [[ "${{ inputs.sonar_host_url }}" == "https://sonarcloud.io" ]]; then
+            echo "Using SonarCloud..."
+            mvn clean verify sonar:sonar \
+              -Dsonar.host.url=${{ inputs.sonar_host_url }} \
+              -Dsonar.organization=${{ inputs.sonar_organization }} \
+              -Dsonar.projectKey=${{ inputs.sonar_project_key }} \
+              -Dsonar.token=${{ secrets.sonar_token }} \
+              -Dsonar.sources=${{ inputs.scan_path }} \
+              ${{ inputs.additional_args }} \
+              -B
+          else
+            echo "Using Self-hosted SonarQube..."
+            mvn clean verify sonar:sonar \
+              -Dsonar.host.url=${{ inputs.sonar_host_url }} \
+              -Dsonar.projectKey=${{ inputs.sonar_project_key }} \
+              -Dsonar.token=${{ secrets.sonar_token }} \
+              -Dsonar.sources=${{ inputs.scan_path }} \
+              ${{ inputs.additional_args }} \
+              -B
+          fi
+          
+          echo "✅ SonarQube Maven analysis completed"
+
+      # ------------------------------------------------------------------------
+      # 4B. SONARQUBE SCAN - NON-MAVEN (Node.js, Python, Generic)
+      # ------------------------------------------------------------------------
+
+      # ------------------------------------------------------------------------
       # 4. SONARQUBE SCAN
       # ------------------------------------------------------------------------
       - name: SonarQube Scan (SonarCloud)
