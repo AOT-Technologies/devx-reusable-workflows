@@ -235,7 +235,9 @@ jobs:
             ${{ inputs.additional_args }}
 
       - name: SonarQube Scan (Self-Hosted)
-        if: inputs.sonar_host_url != 'https://sonarcloud.io'
+        if: |
+          inputs.sonar_host_url != 'https://sonarcloud.io' &&
+          steps.detect_lang.outputs.language != 'maven'
         uses: sonarsource/sonarqube-scan-action@master
         env:
           SONAR_TOKEN: ${{ secrets.sonar_token }}
