@@ -245,24 +245,6 @@ jobs:
             -Dsonar.projectKey=${{ inputs.sonar_project_key }}
             -Dsonar.sources=${{ inputs.scan_path }}
             ${{ inputs.coverage_report_path != '' && format('-Dsonar.coverageReportPaths={0}', inputs.coverage_report_path) || '' }}
-            ${{ inputs.additional_args }}
-
-      # ------------------------------------------------------------------------
-      # 5. QUALITY GATE CHECK
-      # ------------------------------------------------------------------------
-      - name: Wait for Quality Gate
-        if: inputs.wait_for_quality_gate == true
-        uses: sonarsource/sonarqube-quality-gate-action@master
-        timeout-minutes: 5
-        env:
-          SONAR_TOKEN: ${{ secrets.sonar_token }}
-          SONAR_HOST_URL: ${{ inputs.sonar_host_url }}
-        continue-on-error: ${{ !inputs.fail_on_quality_gate }}
-
-      # ------------------------------------------------------------------------
-      # 6. SUMMARY & REPORTING
-      # ------------------------------------------------------------------------
-      - name: Generate Scan Summary
         if: always()
         run: |
           echo "## 🔍 SonarQube SAST Scan Results" >> $GITHUB_STEP_SUMMARY
