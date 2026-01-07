@@ -281,7 +281,7 @@ jobs:
     steps:
       - name: Generate Pipeline Summary
         run: |
-          echo "## 🔐 Enterprise CI Pipeline Summary" >> $GITHUB_STEP_SUMMARY
+          echo "## CI Pipeline Summary" >> $GITHUB_STEP_SUMMARY
           echo "" >> $GITHUB_STEP_SUMMARY
           
           # Configuration Info
