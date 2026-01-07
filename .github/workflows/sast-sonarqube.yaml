@@ -230,24 +230,6 @@ jobs:
             -Dsonar.sources=${{ inputs.scan_path }}
             -Dsonar.verbose=false
             ${{ inputs.coverage_report_path != '' && format('-Dsonar.coverageReportPaths={0}', inputs.coverage_report_path) || '' }}
-            ${{ inputs.additional_args }}
-
-      - name: SonarQube Scan (Self-Hosted)
-        if: |
-          inputs.sonar_host_url != 'https://sonarcloud.io' &&
-          steps.detect_lang.outputs.language != 'maven'
-        uses: sonarsource/sonarqube-scan-action@master
-        env:
-          SONAR_TOKEN: ${{ secrets.sonar_token }}
-          SONAR_HOST_URL: ${{ inputs.sonar_host_url }}
-        with:
-          args: >
-            -Dsonar.projectKey=${{ inputs.sonar_project_key }}
-            -Dsonar.sources=${{ inputs.scan_path }}
-            ${{ inputs.coverage_report_path != '' && format('-Dsonar.coverageReportPaths={0}', inputs.coverage_report_path) || '' }}
-        if: always()
-        run: |
-          echo "## 🔍 SonarQube SAST Scan Results" >> $GITHUB_STEP_SUMMARY
           echo "" >> $GITHUB_STEP_SUMMARY
           echo "- **Project Key:** ${{ inputs.sonar_project_key }}" >> $GITHUB_STEP_SUMMARY
           echo "- **Server:** ${{ inputs.sonar_host_url }}" >> $GITHUB_STEP_SUMMARY
