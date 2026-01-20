@@ -35,6 +35,10 @@ on:
         description: "Directory/File to upload. Leave blank to skip."
         type: string
         default: ""
+      artifact_name:
+        description: "Name of the artifact to upload. If blank, defaults to python-build-${{ github.sha }}"
+        type: string
+        default: ""
 
     outputs:
       artifact_name:
@@ -140,11 +144,20 @@ jobs:
       # ------------------------------------------------------------------------
       # ARTIFACT UPLOAD
       # ------------------------------------------------------------------------
+      - name: Determine Artifact Name
+        id: artifact_name
+        run: |
+          if [[ -n "${{ inputs.artifact_name }}" ]]; then
+            echo "name=${{ inputs.artifact_name }}" >> $GITHUB_OUTPUT
+          else
+            echo "name=python-build-${{ github.sha }}" >> $GITHUB_OUTPUT
+          fi
+
       - name: Upload Build Artifact
         if: inputs.artifact_path != ''
         uses: actions/upload-artifact@v4.3.1
         with:
-          name: python-build-${{ github.sha }}
+          name: ${{ steps.artifact_name.outputs.name }}
           path: ${{ inputs.working_directory }}/${{ inputs.artifact_path }}
           retention-days: 90
 
@@ -152,7 +165,7 @@ jobs:
         id: set_artifact_name
         run: |
           if [[ -n "${{ inputs.artifact_path }}" ]]; then
-            echo "artifact_name=python-build-${{ github.sha }}" >> $GITHUB_OUTPUT
+            echo "artifact_name=${{ steps.artifact_name.outputs.name }}" >> $GITHUB_OUTPUT
           else
             echo "artifact_name=" >> $GITHUB_OUTPUT
           fi

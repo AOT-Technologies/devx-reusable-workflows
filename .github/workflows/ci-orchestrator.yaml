@@ -196,6 +196,7 @@ jobs:
       run_build: ${{ fromJson(needs.load-config.outputs.config).build.run_build == true }}
       build_script: ${{ fromJson(needs.load-config.outputs.config).build.build_script || 'build' }}
       artifact_path: ${{ fromJson(needs.load-config.outputs.config).build.artifact_path || '' }}
+      artifact_name: ${{ needs.load-config.outputs.artifact_name }}
 
   build-python:
     needs: [load-config, sast-semgrep, sast-sonarqube, iac]
@@ -216,6 +217,7 @@ jobs:
       test_script: ${{ fromJson(needs.load-config.outputs.config).build.test_script || 'python -m pytest' }}
       build_command: ${{ fromJson(needs.load-config.outputs.config).build.build_script || '' }}
       artifact_path: ${{ fromJson(needs.load-config.outputs.config).build.artifact_path || '' }}
+      artifact_name: ${{ needs.load-config.outputs.artifact_name }}
 
   build-maven:
     needs: [load-config, sast-semgrep, sast-sonarqube, iac]
@@ -236,6 +238,7 @@ jobs:
       test_script: ${{ fromJson(needs.load-config.outputs.config).build.test_script || 'mvn test -B' }}
       maven_args: ${{ fromJson(needs.load-config.outputs.config).build.build_script || '-B clean package -DskipTests' }}
       artifact_path: ${{ fromJson(needs.load-config.outputs.config).build.artifact_path || '' }}
+      artifact_name: ${{ needs.load-config.outputs.artifact_name }}
 
   # ---------------------------------------------------------------------------
   # 4. ARTIFACTORY UPLOAD (Conditional!)

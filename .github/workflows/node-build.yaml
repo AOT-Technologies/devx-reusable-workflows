@@ -32,6 +32,11 @@ on:
       artifact_path:
         type: string
         default: ""
+      artifact_name:
+        description: "Name of the artifact to upload. If blank, defaults to node-build-${{ github.run_id }}"
+        type: string
+        default: ""
+
     outputs:
       artifact_name:
         description: "Name of uploaded artifact (empty if no upload)"
@@ -140,11 +145,20 @@ jobs:
         if: inputs.run_build == true && steps.check_build.outputs.build_exists == 'true'
         run: npm run ${{ inputs.build_script }}
 
+      - name: Determine Artifact Name
+        id: artifact_name
+        run: |
+          if [[ -n "${{ inputs.artifact_name }}" ]]; then
+            echo "name=${{ inputs.artifact_name }}" >> $GITHUB_OUTPUT
+          else
+            echo "name=node-build-${{ github.run_id }}" >> $GITHUB_OUTPUT
+          fi
+
       - name: Upload Build Artifact
         if: inputs.artifact_path != ''
         uses: actions/upload-artifact@v4.3.1
         with:
-          name: node-build-${{ github.run_id }}
+          name: ${{ steps.artifact_name.outputs.name }}
           path: ${{ inputs.working_directory }}/${{ inputs.artifact_path }}
           retention-days: 90
 
@@ -152,7 +166,7 @@ jobs:
         id: set_artifact_name
         run: |
           if [[ -n "${{ inputs.artifact_path }}" ]]; then
-            echo "artifact_name=node-build-${{ github.run_id }}" >> $GITHUB_OUTPUT
+            echo "artifact_name=${{ steps.artifact_name.outputs.name }}" >> $GITHUB_OUTPUT
           else
             echo "artifact_name=" >> $GITHUB_OUTPUT
           fi

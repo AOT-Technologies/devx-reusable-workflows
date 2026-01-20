@@ -40,6 +40,10 @@ on:
         description: "Path to jar/war relative to working_directory. Leave blank to skip."
         type: string
         default: ""
+      artifact_name:
+        description: "Name of the artifact to upload. If blank, defaults to maven-build-${{ github.sha }}"
+        type: string
+        default: ""
 
     outputs:
       artifact_name:
@@ -133,11 +137,20 @@ jobs:
         if: inputs.maven_args != 'none' && inputs.maven_args != ''
         run: mvn ${{ inputs.maven_args }} -f pom.xml
 
+      - name: Determine Artifact Name
+        id: artifact_name
+        run: |
+          if [[ -n "${{ inputs.artifact_name }}" ]]; then
+            echo "name=${{ inputs.artifact_name }}" >> $GITHUB_OUTPUT
+          else
+            echo "name=maven-build-${{ github.sha }}" >> $GITHUB_OUTPUT
+          fi
+
       - name: Upload Build Artifact
         if: inputs.artifact_path != ''
         uses: actions/upload-artifact@v4.3.1
         with:
-          name: maven-build-${{ github.sha }}
+          name: ${{ steps.artifact_name.outputs.name }}
           path: ${{ inputs.working_directory }}/${{ inputs.artifact_path }}
           retention-days: 90
 
@@ -145,7 +158,7 @@ jobs:
         id: set_artifact_name
         run: |
           if [[ -n "${{ inputs.artifact_path }}" ]]; then
-            echo "artifact_name=maven-build-${{ github.sha }}" >> $GITHUB_OUTPUT
+            echo "artifact_name=${{ steps.artifact_name.outputs.name }}" >> $GITHUB_OUTPUT
           else
             echo "artifact_name=" >> $GITHUB_OUTPUT
           fi
