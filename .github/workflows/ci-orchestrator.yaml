@@ -282,7 +282,11 @@ jobs:
       !contains(needs.*.result, 'cancelled')
     
     uses: ./.github/workflows/docker-build.yaml
-    secrets: inherit
+    secrets:
+      registry_username: ${{ secrets.registry_username }}
+      registry_password: ${{ secrets.registry_password }}
+      artifactory_user: ${{ secrets.artifactory_user }}
+      artifactory_token: ${{ secrets.artifactory_token }}
     with:
       working_directory: ${{ fromJson(needs.load-config.outputs.config).docker.working_directory || '.' }}
       dockerfile: ${{ fromJson(needs.load-config.outputs.config).docker.dockerfile || 'Dockerfile' }}
@@ -295,10 +299,7 @@ jobs:
       # Generic registry context
       registry_url: ${{ fromJson(needs.load-config.outputs.config).docker.registry_url || '' }}
       # Build configuration
-      build_args: |
-        ${{ fromJson(needs.load-config.outputs.config).docker.build_args || '' }}
-        ARTIFACTORY_USER=${{ secrets.artifactory_user }}
-        ARTIFACTORY_TOKEN=${{ secrets.artifactory_token }}
+      build_args: ${{ fromJson(needs.load-config.outputs.config).docker.build_args || '' }}
       platforms: ${{ fromJson(needs.load-config.outputs.config).docker.platforms || 'linux/amd64' }}
 
   # ---------------------------------------------------------------------------

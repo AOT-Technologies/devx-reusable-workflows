@@ -68,6 +68,13 @@ on:
       registry_password:
         description: "Password/Token for Generic Registry"
         required: false
+      # Artifactory Credentials (for Dockerfile download)
+      artifactory_user:
+        description: "Artifactory Username"
+        required: false
+      artifactory_token:
+        description: "Artifactory Token"
+        required: false
 
     outputs:
       image_uri:
@@ -247,6 +254,30 @@ jobs:
           echo "Image will be pushed to: $FULL_URI"
 
       # ------------------------------------------------------------------------
+      # PREPARE BUILD ARGUMENTS
+      # ------------------------------------------------------------------------
+      - name: Prepare Build Arguments
+        id: build_args
+        run: |
+          # Use a temporary file to handle multi-line build args safely
+          cat > build_args.txt << 'EOF'
+          ${{ inputs.build_args }}
+          EOF
+          
+          # Append Artifactory credentials if they exist as secrets
+          if [[ -n "${{ secrets.artifactory_user }}" ]]; then
+            echo "ARTIFACTORY_USER=${{ secrets.artifactory_user }}" >> build_args.txt
+          fi
+          if [[ -n "${{ secrets.artifactory_token }}" ]]; then
+            echo "ARTIFACTORY_TOKEN=${{ secrets.artifactory_token }}" >> build_args.txt
+          fi
+          
+          # Output the combined build args
+          echo "combined_args<<EOF" >> $GITHUB_OUTPUT
+          cat build_args.txt >> $GITHUB_OUTPUT
+          echo "EOF" >> $GITHUB_OUTPUT
+
+      # ------------------------------------------------------------------------
       # SHARED: BUILD & PUSH
       # ------------------------------------------------------------------------
       - name: Build and Push
@@ -258,7 +289,7 @@ jobs:
           push: true
           tags: ${{ steps.meta.outputs.full_uri }}
           platforms: ${{ inputs.platforms }}
-          build-args: ${{ inputs.build_args }}
+          build-args: ${{ steps.build_args.outputs.combined_args }}
           # Standard GHA Caching
           cache-from: type=gha
           cache-to: type=gha,mode=max
