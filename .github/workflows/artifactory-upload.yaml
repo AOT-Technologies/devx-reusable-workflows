@@ -108,6 +108,32 @@ jobs:
     
     steps:
       # ------------------------------------------------------------------------
+      # 0. PRE-FLIGHT CHECKS
+      # ------------------------------------------------------------------------
+      - name: Pre-flight Check
+        run: |
+          echo "🔍 Checking Artifactory configuration..."
+          
+          MISSING_SECRETS=0
+          if [[ -z "${{ secrets.artifactory_user }}" ]]; then
+            echo "::error::ARTIFACTORY_USER secret is missing or empty"
+            MISSING_SECRETS=1
+          fi
+          if [[ -z "${{ secrets.artifactory_token }}" ]]; then
+            echo "::error::ARTIFACTORY_TOKEN secret is missing or empty"
+            MISSING_SECRETS=1
+          fi
+          
+          if [[ "$MISSING_SECRETS" -eq 1 ]]; then
+            echo "::error::One or more required secrets are missing. Please check your GitHub Repository Secrets."
+            exit 1
+          fi
+          
+          echo "✅ Secrets are present"
+          echo "📍 URL: ${{ inputs.artifactory_url }}"
+          echo "📍 Repository: ${{ inputs.repository }}"
+
+      # ------------------------------------------------------------------------
       # 1. DOWNLOAD BUILD ARTIFACT
       # ------------------------------------------------------------------------
       - name: Download Build Artifact from GitHub
@@ -198,7 +224,8 @@ jobs:
           # -s: silent
           # -w "%{http_code}": output only the HTTP status code
           # -o response.txt: save the response body (error message) to a file
-          CURL_CMD="curl -s -u${{ secrets.artifactory_user }}:${{ secrets.artifactory_token }} -w \"%{http_code}\" -o response.txt"
+          # Use single quotes for credentials to handle special characters
+          CURL_CMD="curl -s -u '${{ secrets.artifactory_user }}:${{ secrets.artifactory_token }}' -w \"%{http_code}\" -o response.txt"
           
           # Add checksums if calculated
           if [[ "${{ inputs.calculate_checksums }}" == "true" ]]; then
@@ -243,14 +270,14 @@ jobs:
           # Get file info from Artifactory
           # -I: fetch headers only
           # -f: fail on server errors
-          RESPONSE_CODE=$(curl -s -o /dev/null -w "%{http_code}" -u${{ secrets.artifactory_user }}:${{ secrets.artifactory_token }} \
+          RESPONSE_CODE=$(curl -s -o /dev/null -w "%{http_code}" -u '${{ secrets.artifactory_user }}:${{ secrets.artifactory_token }}' \
                          "$FULL_URL")
           
           if [[ "$RESPONSE_CODE" -eq 200 ]]; then
             echo "✅ Artifact verified in Artifactory"
             
             # Get file size from Artifactory
-            SIZE=$(curl -s -I -u${{ secrets.artifactory_user }}:${{ secrets.artifactory_token }} \
+            SIZE=$(curl -s -I -u '${{ secrets.artifactory_user }}:${{ secrets.artifactory_token }}' \
                    "$FULL_URL" | grep -i content-length | awk '{print $2}' | tr -d '\r')
             
             if [[ -n "$SIZE" ]]; then
@@ -305,7 +332,7 @@ jobs:
           # Upload build info to Artifactory
           BUILD_INFO_URL="${{ inputs.artifactory_url }}/api/build"
           
-          HTTP_STATUS=$(curl -s -u${{ secrets.artifactory_user }}:${{ secrets.artifactory_token }} \
+          HTTP_STATUS=$(curl -s -u '${{ secrets.artifactory_user }}:${{ secrets.artifactory_token }}' \
                -X PUT \
                -H "Content-Type: application/json" \
                -d @build-info.json \
