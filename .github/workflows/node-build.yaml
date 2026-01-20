@@ -33,7 +33,7 @@ on:
         type: string
         default: ""
       artifact_name:
-        description: "Name of the artifact to upload. If blank, defaults to node-build-${{ github.run_id }}"
+        description: "Name of the artifact to upload. If blank, a default name will be used."
         type: string
         default: ""
 

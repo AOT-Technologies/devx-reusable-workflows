@@ -41,7 +41,7 @@ on:
         type: string
         default: ""
       artifact_name:
-        description: "Name of the artifact to upload. If blank, defaults to maven-build-${{ github.sha }}"
+        description: "Name of the artifact to upload. If blank, a default name will be used."
         type: string
         default: ""
 
