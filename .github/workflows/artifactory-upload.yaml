@@ -195,7 +195,10 @@ jobs:
           echo "URL: $FULL_URL"
           
           # Build curl command with headers
-          CURL_CMD="curl -u${{ secrets.artifactory_user }}:${{ secrets.artifactory_token }}"
+          # -s: silent
+          # -w "%{http_code}": output only the HTTP status code
+          # -o response.txt: save the response body (error message) to a file
+          CURL_CMD="curl -s -u${{ secrets.artifactory_user }}:${{ secrets.artifactory_token }} -w \"%{http_code}\" -o response.txt"
           
           # Add checksums if calculated
           if [[ "${{ inputs.calculate_checksums }}" == "true" ]]; then
@@ -213,15 +216,18 @@ jobs:
           CURL_CMD="$CURL_CMD -X PUT -T \"$ARTIFACT_FILE\" \"$FULL_URL\""
           
           echo "Executing upload..."
-          eval $CURL_CMD
+          HTTP_STATUS=$(eval $CURL_CMD)
           
-          # Check if upload succeeded
-          if [[ $? -eq 0 ]]; then
+          echo "HTTP Status: $HTTP_STATUS"
+          
+          if [[ "$HTTP_STATUS" -eq 200 || "$HTTP_STATUS" -eq 201 ]]; then
             echo "✅ Upload successful!"
             echo "url=$FULL_URL" >> $GITHUB_OUTPUT
             echo "path=${UPLOAD_PATH}" >> $GITHUB_OUTPUT
           else
-            echo "::error::Upload failed!"
+            echo "::error::Upload failed with status $HTTP_STATUS"
+            echo "Response body:"
+            cat response.txt
             exit 1
           fi
 
@@ -235,10 +241,12 @@ jobs:
           echo "🔍 Verifying uploaded artifact..."
           
           # Get file info from Artifactory
-          RESPONSE=$(curl -s -u${{ secrets.artifactory_user }}:${{ secrets.artifactory_token }} \
-                     "$FULL_URL")
+          # -I: fetch headers only
+          # -f: fail on server errors
+          RESPONSE_CODE=$(curl -s -o /dev/null -w "%{http_code}" -u${{ secrets.artifactory_user }}:${{ secrets.artifactory_token }} \
+                         "$FULL_URL")
           
-          if [[ -n "$RESPONSE" ]]; then
+          if [[ "$RESPONSE_CODE" -eq 200 ]]; then
             echo "✅ Artifact verified in Artifactory"
             
             # Get file size from Artifactory
@@ -249,7 +257,8 @@ jobs:
               echo "📦 Remote size: $SIZE bytes"
             fi
           else
-            echo "::warning::Could not verify artifact (but upload may have succeeded)"
+            echo "::error::Could not verify artifact. Artifactory returned status $RESPONSE_CODE"
+            exit 1
           fi
 
       # ------------------------------------------------------------------------
@@ -296,11 +305,20 @@ jobs:
           # Upload build info to Artifactory
           BUILD_INFO_URL="${{ inputs.artifactory_url }}/api/build"
           
-          curl -u${{ secrets.artifactory_user }}:${{ secrets.artifactory_token }} \
+          HTTP_STATUS=$(curl -s -u${{ secrets.artifactory_user }}:${{ secrets.artifactory_token }} \
                -X PUT \
                -H "Content-Type: application/json" \
                -d @build-info.json \
-               "$BUILD_INFO_URL" || echo "::warning::Build info upload failed (non-critical)"
+               -w "%{http_code}" \
+               -o build_info_response.txt \
+               "$BUILD_INFO_URL")
+          
+          if [[ "$HTTP_STATUS" -eq 200 || "$HTTP_STATUS" -eq 204 ]]; then
+            echo "✅ Build info uploaded successfully"
+          else
+            echo "::warning::Build info upload failed with status $HTTP_STATUS"
+            cat build_info_response.txt
+          fi
 
       # ------------------------------------------------------------------------
       # 7. SUMMARY
