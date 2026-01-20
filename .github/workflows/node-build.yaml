@@ -22,11 +22,12 @@ on:
         type: string
         default: "test"
       # --- BUILD INPUTS ---
-      run_build:  # ✅ NEW: Make build optional
+      run_build:
         description: "Enable build step?"
         type: boolean
         default: false
       build_script:
+        description: "Script name (e.g., 'build') or full command (e.g., 'npm run build && tar ...')"
         type: string
         default: "build"
       artifact_path:
@@ -102,20 +103,15 @@ jobs:
       - name: Install Dependencies
         run: npm ci --prefer-offline --no-audit
 
-      - name: Check if Test Script Exists
-        if: inputs.run_tests == true
-        id: check_test
-        run: |
-          if npm run | grep -q "^  ${{ inputs.test_script }}$"; then
-            echo "test_exists=true" >> $GITHUB_OUTPUT
-          else
-            echo "test_exists=false" >> $GITHUB_OUTPUT
-            echo "Test script '${{ inputs.test_script }}' not found"
-          fi
-
       - name: Run Unit Tests
-        if: inputs.run_tests == true && steps.check_test.outputs.test_exists == 'true'
-        run: npm run ${{ inputs.test_script }}
+        if: inputs.run_tests == true
+        run: |
+          # Check if test script exists in package.json
+          if npm run | grep -q "^  ${{ inputs.test_script }}$"; then
+            npm run ${{ inputs.test_script }}
+          else
+            echo "::warning::Test script '${{ inputs.test_script }}' not found in package.json. Skipping tests."
+          fi
 
       - name: Upload Test Results
         if: always() && inputs.run_tests == true
@@ -129,21 +125,18 @@ jobs:
           retention-days: 30
           if-no-files-found: ignore
 
-      - name: Check if Build Script Exists
-        if: inputs.run_build == true
-        id: check_build
-        run: |
-          if npm run | grep -q "^  ${{ inputs.build_script }}$"; then
-            echo "build_exists=true" >> $GITHUB_OUTPUT
-          else
-            echo "build_exists=false" >> $GITHUB_OUTPUT
-            echo "::error::Build enabled but script '${{ inputs.build_script }}' not found"
-            exit 1
-          fi
-
       - name: Build Application
-        if: inputs.run_build == true && steps.check_build.outputs.build_exists == 'true'
-        run: npm run ${{ inputs.build_script }}
+        if: inputs.run_build == true
+        run: |
+          # If build_script is a script name in package.json, use npm run
+          # Otherwise, execute it as a raw shell command
+          if npm run | grep -q "^  ${{ inputs.build_script }}$"; then
+            echo "🚀 Running npm script: ${{ inputs.build_script }}"
+            npm run ${{ inputs.build_script }}
+          else
+            echo "🚀 Running custom build command: ${{ inputs.build_script }}"
+            ${{ inputs.build_script }}
+          fi
 
       - name: Determine Artifact Name
         id: artifact_name
