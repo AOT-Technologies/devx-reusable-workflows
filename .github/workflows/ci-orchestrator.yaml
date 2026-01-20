@@ -5,7 +5,9 @@ name: "Orchestrator: CI Pipeline"
 # 1. Reads 'devx-ci.yaml'
 # 2. Parallelizes Pre-Build Security Gates (SAST: Semgrep or SonarQube, IaC)
 # 3. Routes to Language-Specific Builds (Node/Python/Maven)
-# 4. Sequential Post-Build Security: Docker → Trivy → SBOM → SBOM-Scan
+# 4. Uploads artifacts to JFrog Artifactory**
+# 5. Builds Docker images
+# 6. Sequential Post-Build Security: Trivy → SBOM → SBOM-Scan
 # ------------------------------------------------------------------------------
 
 on:
@@ -22,6 +24,11 @@ on:
       registry_password:
         required: false
       sonar_token:
+        required: false
+      # JFrog Artifactory**
+      artifactory_user:
+        required: false
+      artifactory_token:
         required: false
 
 # Prevent multiple runs on same ref (with smart cancellation)
@@ -216,10 +223,46 @@ jobs:
       artifact_path: ${{ fromJson(needs.load-config.outputs.config).build.artifact_path || '' }}
 
   # ---------------------------------------------------------------------------
-  # 4. DOCKER BUILD (Conditional)
+  # 4. ARTIFACTORY UPLOAD (Conditional!)
+  # ---------------------------------------------------------------------------
+  artifactory-upload:
+    needs: [load-config, build-node, build-python, build-maven]
+    if: |
+      always() &&
+      fromJson(needs.load-config.outputs.config).artifactory.enabled == true &&
+      !contains(needs.*.result, 'failure') &&
+      !contains(needs.*.result, 'cancelled')
+    uses: ./.github/workflows/artifactory-upload.yaml
+    secrets:
+      artifactory_user: ${{ secrets.artifactory_user }}
+      artifactory_token: ${{ secrets.artifactory_token }}
+    with:
+      artifactory_url: ${{ fromJson(needs.load-config.outputs.config).artifactory.url }}
+      repository: ${{ fromJson(needs.load-config.outputs.config).artifactory.repository }}
+      # Dynamically select artifact name based on which build ran
+      artifact_name: |
+        ${{
+          needs.build-maven.outputs.artifact_name != '' && needs.build-maven.outputs.artifact_name ||
+          needs.build-node.outputs.artifact_name != '' && needs.build-node.outputs.artifact_name ||
+          needs.build-python.outputs.artifact_name != '' && needs.build-python.outputs.artifact_name ||
+          ''
+        }}
+      artifact_file: ${{ fromJson(needs.load-config.outputs.config).artifactory.artifact_file }}
+      # Maven coordinates (if Maven)
+      group_id: ${{ needs.load-config.outputs.language == 'maven' && fromJson(needs.load-config.outputs.config).artifactory.group_id || '' }}
+      artifact_id: ${{ needs.load-config.outputs.language == 'maven' && fromJson(needs.load-config.outputs.config).artifactory.artifact_id || '' }}
+      version: ${{ needs.load-config.outputs.language == 'maven' && fromJson(needs.load-config.outputs.config).artifactory.version || '' }}
+      # Generic path (if not Maven)
+      upload_path: ${{ needs.load-config.outputs.language != 'maven' && fromJson(needs.load-config.outputs.config).artifactory.upload_path || '' }}
+      # Options
+      calculate_checksums: ${{ fromJson(needs.load-config.outputs.config).artifactory.calculate_checksums != false }}
+      properties: ${{ fromJson(needs.load-config.outputs.config).artifactory.properties || '' }}
+
+  # ---------------------------------------------------------------------------
+  # 5. DOCKER BUILD (Conditional)
   # ---------------------------------------------------------------------------
   docker:
-    needs: [load-config, build-node, build-python, build-maven]
+    needs: [load-config, build-node, build-python, build-maven, artifactory-upload]
     if: |
       always() && 
       fromJson(needs.load-config.outputs.config).docker.enabled == true &&
@@ -244,7 +287,7 @@ jobs:
       platforms: ${{ fromJson(needs.load-config.outputs.config).docker.platforms || 'linux/amd64' }}
 
   # ---------------------------------------------------------------------------
-  # 5. POST-BUILD SECURITY (SEQUENTIAL CHAIN)
+  # 6. POST-BUILD SECURITY (SEQUENTIAL CHAIN)
   # Docker → Trivy → SBOM → SBOM-Scan
   # ---------------------------------------------------------------------------
   
@@ -302,11 +345,11 @@ jobs:
       output_format: ${{ fromJson(needs.load-config.outputs.config).security.sbom_scan.format || 'sarif' }}
 
   # ---------------------------------------------------------------------------
-  # 6. PIPELINE SUMMARY (Always runs for observability)
+  # 7. PIPELINE SUMMARY (Always runs for observability)
   # ---------------------------------------------------------------------------
   summary:
     if: always()
-    needs: [load-config, sast-semgrep, sast-sonarqube, iac, build-node, build-python, build-maven, docker, trivy, sbom, sbom-scan]
+    needs: [load-config, sast-semgrep, sast-sonarqube, iac, build-node, build-python, build-maven, artifactory-upload, docker, trivy, sbom, sbom-scan]
     runs-on: ubuntu-latest
     timeout-minutes: 2
     
@@ -338,6 +381,8 @@ jobs:
           echo "| ├─ Node.js Build | ${{ needs.build-node.result }} |" >> $GITHUB_STEP_SUMMARY
           echo "| ├─ Python Build | ${{ needs.build-python.result }} |" >> $GITHUB_STEP_SUMMARY
           echo "| └─ Maven Build | ${{ needs.build-maven.result }} |" >> $GITHUB_STEP_SUMMARY
+          echo "| **Artifact Management** | |" >> $GITHUB_STEP_SUMMARY
+          echo "| └─ Artifactory Upload | ${{ needs.artifactory-upload.result }} |" >> $GITHUB_STEP_SUMMARY
           echo "| **Container** | |" >> $GITHUB_STEP_SUMMARY
           echo "| └─ Docker Build | ${{ needs.docker.result }} |" >> $GITHUB_STEP_SUMMARY
           echo "| **Post-Build Security (Sequential)** | |" >> $GITHUB_STEP_SUMMARY
@@ -361,9 +406,18 @@ jobs:
             echo "All enabled stages completed successfully!" >> $GITHUB_STEP_SUMMARY
           fi
           
+          echo "" >> $GITHUB_STEP_SUMMARY
+          
+          # Artifactory Info (if uploaded)
+          if [[ "${{ needs.artifactory-upload.result }}" == "success" ]]; then
+            echo "### 📦 Artifactory Upload" >> $GITHUB_STEP_SUMMARY
+            echo "- **URL:** ${{ needs.artifactory-upload.outputs.artifact_url }}" >> $GITHUB_STEP_SUMMARY
+            echo "- **Path:** ${{ needs.artifactory-upload.outputs.artifact_path }}" >> $GITHUB_STEP_SUMMARY
+            echo "" >> $GITHUB_STEP_SUMMARY
+          fi
+          
           # Docker Image Info (if built)
           if [[ "${{ needs.docker.result }}" == "success" ]]; then
-            echo "" >> $GITHUB_STEP_SUMMARY
             echo "### 🐳 Container Image" >> $GITHUB_STEP_SUMMARY
             echo "Image URI: \`${{ needs.docker.outputs.image_uri }}\`" >> $GITHUB_STEP_SUMMARY
           fi
