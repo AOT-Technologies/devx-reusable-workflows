@@ -106,37 +106,51 @@ jobs:
           java-version: '17'
           distribution: 'temurin'
 
-      # Auto-detect language in the correct directory (scan_path)
+      # Auto-detect language by checking both scan_path and root
       - name: Detect Project Language
         id: detect_lang
         run: |
-          # Determine the directory to check
           SCAN_DIR="${{ inputs.scan_path }}"
+          ROOT_DIR="$PWD"
           
-          # Normalize path
+          # Normalize SCAN_DIR
           if [[ "$SCAN_DIR" == "." ]]; then
-            SCAN_DIR="$PWD"
+            SCAN_DIR="$ROOT_DIR"
           elif [[ ! "$SCAN_DIR" == /* ]]; then
-            # Relative path - make it absolute
-            SCAN_DIR="$PWD/$SCAN_DIR"
+            SCAN_DIR="$ROOT_DIR/$SCAN_DIR"
           fi
           
-          echo "🔍 Checking for project files in: $SCAN_DIR"
-          ls -la "$SCAN_DIR" || true
+          echo "🔍 Checking for project files..."
           
-          # Detect language by checking for specific files in scan directory
+          # Detection logic: Check SCAN_DIR first, then ROOT_DIR
           if [[ -f "$SCAN_DIR/pom.xml" ]]; then
             echo "language=maven" >> $GITHUB_OUTPUT
-            echo "✅ Detected: Maven project (found pom.xml)"
+            echo "project_root=$SCAN_DIR" >> $GITHUB_OUTPUT
+            echo "✅ Detected: Maven project in $SCAN_DIR"
+          elif [[ -f "$ROOT_DIR/pom.xml" ]]; then
+            echo "language=maven" >> $GITHUB_OUTPUT
+            echo "project_root=$ROOT_DIR" >> $GITHUB_OUTPUT
+            echo "✅ Detected: Maven project in $ROOT_DIR"
           elif [[ -f "$SCAN_DIR/package.json" ]]; then
             echo "language=node" >> $GITHUB_OUTPUT
-            echo "✅ Detected: Node.js project (found package.json)"
+            echo "project_root=$SCAN_DIR" >> $GITHUB_OUTPUT
+            echo "✅ Detected: Node.js project in $SCAN_DIR"
+          elif [[ -f "$ROOT_DIR/package.json" ]]; then
+            echo "language=node" >> $GITHUB_OUTPUT
+            echo "project_root=$ROOT_DIR" >> $GITHUB_OUTPUT
+            echo "✅ Detected: Node.js project in $ROOT_DIR"
           elif [[ -f "$SCAN_DIR/requirements.txt" ]] || [[ -f "$SCAN_DIR/setup.py" ]]; then
             echo "language=python" >> $GITHUB_OUTPUT
-            echo "✅ Detected: Python project (found requirements.txt or setup.py)"
+            echo "project_root=$SCAN_DIR" >> $GITHUB_OUTPUT
+            echo "✅ Detected: Python project in $SCAN_DIR"
+          elif [[ -f "$ROOT_DIR/requirements.txt" ]] || [[ -f "$ROOT_DIR/setup.py" ]]; then
+            echo "language=python" >> $GITHUB_OUTPUT
+            echo "project_root=$ROOT_DIR" >> $GITHUB_OUTPUT
+            echo "✅ Detected: Python project in $ROOT_DIR"
           else
             echo "language=generic" >> $GITHUB_OUTPUT
-            echo "⚠️  Detected: Generic project (no specific language files found)"
+            echo "project_root=$SCAN_DIR" >> $GITHUB_OUTPUT
+            echo "⚠️  Detected: Generic project"
           fi
 
       - name: Setup Node.js (if Node project)
@@ -145,11 +159,11 @@ jobs:
         with:
           node-version: '20'
           cache: 'npm'
-          cache-dependency-path: ${{ inputs.scan_path }}/package-lock.json
+          cache-dependency-path: ${{ steps.detect_lang.outputs.project_root }}/package-lock.json
 
       - name: Install Node Dependencies
         if: steps.detect_lang.outputs.language == 'node'
-        working-directory: ${{ inputs.scan_path }}
+        working-directory: ${{ steps.detect_lang.outputs.project_root }}
         run: npm ci --prefer-offline --no-audit
 
       - name: Setup Python (if Python project)
@@ -158,11 +172,11 @@ jobs:
         with:
           python-version: '3.11'
           cache: 'pip'
-          cache-dependency-path: ${{ inputs.scan_path }}/requirements.txt
+          cache-dependency-path: ${{ steps.detect_lang.outputs.project_root }}/requirements.txt
 
       - name: Install Python Dependencies
         if: steps.detect_lang.outputs.language == 'python'
-        working-directory: ${{ inputs.scan_path }}
+        working-directory: ${{ steps.detect_lang.outputs.project_root }}
         run: |
           python -m pip install --upgrade pip
           if [[ -f "requirements.txt" ]]; then
@@ -174,7 +188,7 @@ jobs:
       # ------------------------------------------------------------------------
       - name: Run Tests with Coverage (Node.js)
         if: steps.detect_lang.outputs.language == 'node'
-        working-directory: ${{ inputs.scan_path }}
+        working-directory: ${{ steps.detect_lang.outputs.project_root }}
         continue-on-error: true
         run: |
           if npm run | grep -q "test"; then
@@ -183,7 +197,7 @@ jobs:
 
       - name: Run Tests with Coverage (Python)
         if: steps.detect_lang.outputs.language == 'python'
-        working-directory: ${{ inputs.scan_path }}
+        working-directory: ${{ steps.detect_lang.outputs.project_root }}
         continue-on-error: true
         run: |
           if command -v pytest &> /dev/null; then
@@ -192,7 +206,7 @@ jobs:
 
       - name: Run Tests with Coverage (Maven)
         if: steps.detect_lang.outputs.language == 'maven'
-        working-directory: ${{ inputs.scan_path }}
+        working-directory: ${{ steps.detect_lang.outputs.project_root }}
         continue-on-error: true
         run: |
           mvn clean verify -B || true
@@ -202,7 +216,7 @@ jobs:
       # ------------------------------------------------------------------------
       - name: Run SonarQube Analysis (Maven)
         if: steps.detect_lang.outputs.language == 'maven'
-        working-directory: ${{ inputs.scan_path }}
+        working-directory: ${{ steps.detect_lang.outputs.project_root }}
         env:
           SONAR_TOKEN: ${{ secrets.sonar_token }}
           SONAR_HOST_URL: ${{ inputs.sonar_host_url }}
@@ -277,9 +291,9 @@ jobs:
         id: qg_report
         run: |
           if [[ "${{ steps.detect_lang.outputs.language }}" == "maven" ]]; then
-            echo "report_path=${{ inputs.scan_path }}/target/sonar/report-task.txt" >> $GITHUB_OUTPUT
+            echo "report_path=${{ steps.detect_lang.outputs.project_root }}/target/sonar/report-task.txt" >> $GITHUB_OUTPUT
           else
-            echo "report_path=${{ inputs.scan_path }}/.scannerwork/report-task.txt" >> $GITHUB_OUTPUT
+            echo "report_path=${{ steps.detect_lang.outputs.project_root }}/.scannerwork/report-task.txt" >> $GITHUB_OUTPUT
           fi
 
       - name: Wait for Quality Gate
