@@ -1,0 +1,45 @@
+# =============================================================================
+# Dockerfile for Node.js Application with Artifactory Integration
+# =============================================================================
+FROM node:20-alpine AS builder
+
+WORKDIR /app
+
+ARG ARTIFACTORY_URL=""
+ARG ARTIFACTORY_REPO=""
+ARG ARTIFACT_PATH=""
+ARG ARTIFACTORY_USER=""
+ARG ARTIFACTORY_TOKEN=""
+ARG BUILD_MODE="false"
+
+# Copy package files
+COPY package*.json ./
+
+# Install curl for Artifactory download
+RUN apk add --no-cache curl
+
+RUN if [ "$BUILD_MODE" = "true" ] || [ -z "$ARTIFACTORY_URL" ]; then \
+      echo "🔨 BUILD MODE: Building locally..." && \
+      npm ci && \
+      npm run build; \
+    else \
+      echo "📦 ARTIFACTORY MODE: Downloading from Artifactory..." && \
+      FULL_URL="${ARTIFACTORY_URL}/${ARTIFACTORY_REPO}/${ARTIFACT_PATH}" && \
+      if [ -n "$ARTIFACTORY_USER" ] && [ -n "$ARTIFACTORY_TOKEN" ]; then \
+        curl -s -u "$ARTIFACTORY_USER:$ARTIFACTORY_TOKEN" -o app-dist.tgz "$FULL_URL"; \
+      else \
+        curl -s -o app-dist.tgz "$FULL_URL"; \
+      fi && \
+      tar -xzf app-dist.tgz && \
+      rm app-dist.tgz; \
+    fi
+
+# --- Runtime Stage ---
+FROM node:20-alpine
+WORKDIR /app
+COPY --from=builder /app/dist ./dist
+COPY --from=builder /app/package*.json ./
+RUN npm ci --production
+USER node
+EXPOSE 3000
+CMD ["node", "dist/index.js"]

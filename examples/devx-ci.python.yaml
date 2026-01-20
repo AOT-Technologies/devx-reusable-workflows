@@ -1,0 +1,22 @@
+project:
+  language: python
+  version: "3.11"
+
+build:
+  build_script: "python setup.py bdist_wheel"
+  artifact_path: "dist/*.whl"
+
+artifactory:
+  enabled: true
+  url: "https://your-jfrog-instance.jfrog.io/artifactory"
+  repository: "python-repo-local"
+  artifact_file: "my_app-1.0.0-py3-none-any.whl"
+  upload_path: "my-python-app/1.0.0/my_app-1.0.0-py3-none-any.whl"
+
+docker:
+  enabled: true
+  image_name: my-python-app
+  build_args: |
+    ARTIFACTORY_URL=https://your-jfrog-instance.jfrog.io/artifactory
+    ARTIFACTORY_REPO=python-repo-local
+    ARTIFACT_PATH=my-python-app/1.0.0/my_app-1.0.0-py3-none-any.whl
