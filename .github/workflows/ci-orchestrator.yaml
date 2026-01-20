@@ -56,6 +56,8 @@ jobs:
       config: ${{ steps.parse.outputs.config }}
       language: ${{ steps.extract.outputs.language }}
       sast_tool: ${{ steps.extract.outputs.sast_tool }}
+      artifact_name: ${{ steps.extract.outputs.artifact_name }}
+
     
     steps:
       - name: Checkout Code
@@ -113,6 +115,19 @@ jobs:
           SAST_TOOL=$(yq '.security.sast.tool // "semgrep"' ${{ inputs.config_path }})
           echo "sast_tool=$SAST_TOOL" >> $GITHUB_OUTPUT
           echo "🔍 SAST tool: $SAST_TOOL"
+
+          # Determine expected artifact name based on language
+          if [[ "$LANGUAGE" == "maven" ]]; then
+            ARTIFACT_NAME="maven-build-artifacts-${{ github.run_id }}"
+          elif [[ "$LANGUAGE" == "node" ]]; then
+            ARTIFACT_NAME="node-build-artifacts-${{ github.run_id }}"
+          elif [[ "$LANGUAGE" == "python" ]]; then
+            ARTIFACT_NAME="python-build-artifacts-${{ github.run_id }}"
+          else
+            ARTIFACT_NAME=""
+          fi
+          echo "artifact_name=$ARTIFACT_NAME" >> $GITHUB_OUTPUT
+          echo "📦 Artifact name: $ARTIFACT_NAME"
 
   # ---------------------------------------------------------------------------
   # 2. PRE-BUILD SECURITY GATES (Parallel) - MULTI-SAST SUPPORT
@@ -239,14 +254,7 @@ jobs:
     with:
       artifactory_url: ${{ fromJson(needs.load-config.outputs.config).artifactory.url }}
       repository: ${{ fromJson(needs.load-config.outputs.config).artifactory.repository }}
-      # Dynamically select artifact name based on which build ran
-      artifact_name: |
-        ${{
-          needs.build-maven.outputs.artifact_name != '' && needs.build-maven.outputs.artifact_name ||
-          needs.build-node.outputs.artifact_name != '' && needs.build-node.outputs.artifact_name ||
-          needs.build-python.outputs.artifact_name != '' && needs.build-python.outputs.artifact_name ||
-          ''
-        }}
+      artifact_name: ${{ needs.load-config.outputs.artifact_name }}
       artifact_file: ${{ fromJson(needs.load-config.outputs.config).artifactory.artifact_file }}
       # Maven coordinates (if Maven)
       group_id: ${{ needs.load-config.outputs.language == 'maven' && fromJson(needs.load-config.outputs.config).artifactory.group_id || '' }}
@@ -266,6 +274,7 @@ jobs:
     if: |
       always() && 
       fromJson(needs.load-config.outputs.config).docker.enabled == true &&
+      (needs.artifactory-upload.result == 'success' || needs.artifactory-upload.result == 'skipped') &&
       !contains(needs.*.result, 'failure') && 
       !contains(needs.*.result, 'cancelled')
     
