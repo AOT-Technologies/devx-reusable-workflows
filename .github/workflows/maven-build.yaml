@@ -27,15 +27,11 @@ on:
       test_script:
         description: "Command to run tests"
         type: string
-        # We enforce batch mode (-B) to keep logs clean
         default: "mvn test -B"
       # --- BUILD INPUTS ---
       maven_args:
         description: "Maven packaging arguments"
         type: string
-        # NOTE: Tests are skipped here because they run in a separate step above.
-        # Checkstyle, PMD, and license checks are skipped for build speed.
-        # If you need these checks, enable them in your pom.xml or override this input.
         default: "-B clean package -Dmaven.test.skip=true -Dcheckstyle.skip=true -Dpmd.skip=true -Dlicense.skip=true -Dmaven.antrun.skip=true"
       artifact_path:
         description: "Path to jar/war relative to working_directory."
@@ -121,7 +117,6 @@ on:
 
 permissions:
   contents: read
-  actions: write        # Required for upload-artifact
 
 jobs:
   build:
@@ -133,7 +128,7 @@ jobs:
     
     outputs:
       nexus_path: ${{ steps.upload_nexus.outputs.path }}
-      artifact_file: ${{ steps.maven_coords.outputs.filename }}
+      artifact_file: ${{ steps.detect_artifact.outputs.filename }}
       group_id: ${{ steps.maven_coords.outputs.group_id }}
       artifact_id: ${{ steps.maven_coords.outputs.artifact_id }}
       version: ${{ steps.maven_coords.outputs.version }}
@@ -153,21 +148,7 @@ jobs:
       # --- UNIT TEST STEP ---
       - name: Run Unit Tests
         if: inputs.run_tests == true
-        # We run this BEFORE packaging to catch errors early
         run: ${{ inputs.test_script }} -f pom.xml
-
-      # Added test results capture
-      - name: Upload Test Results
-        if: always() && inputs.run_tests == true
-        uses: actions/upload-artifact@v4.3.1
-        with:
-          name: maven-test-results-${{ github.sha }}
-          path: |
-            ${{ inputs.working_directory }}/target/surefire-reports/
-            ${{ inputs.working_directory }}/target/failsafe-reports/
-            ${{ inputs.working_directory }}/target/site/jacoco/
-          retention-days: 30
-          if-no-files-found: ignore
 
       - name: Build with Maven
         if: inputs.maven_args != 'none' && inputs.maven_args != ''
@@ -182,48 +163,74 @@ jobs:
           VERSION=$(mvn help:evaluate -Dexpression=project.version -q -DforceStdout)
           PACKAGING=$(mvn help:evaluate -Dexpression=project.packaging -q -DforceStdout)
           
-          FILENAME="${ARTIFACT_ID}-${VERSION}.${PACKAGING}"
-          
           echo "group_id=$GROUP_ID" >> $GITHUB_OUTPUT
           echo "artifact_id=$ARTIFACT_ID" >> $GITHUB_OUTPUT
           echo "version=$VERSION" >> $GITHUB_OUTPUT
           echo "packaging=$PACKAGING" >> $GITHUB_OUTPUT
-          echo "filename=$FILENAME" >> $GITHUB_OUTPUT
           
-          echo "📦 Built: $FILENAME"
+          echo "📦 Maven Coordinates:"
           echo "   Group: $GROUP_ID"
           echo "   Artifact: $ARTIFACT_ID"
           echo "   Version: $VERSION"
+          echo "   Packaging: $PACKAGING"
+
+      # --- DETECT ACTUAL ARTIFACT FILE ---
+      - name: Detect Artifact File
+        id: detect_artifact
+        run: |
+          # Find the actual JAR file (exclude .original files from Spring Boot repackaging)
+          shopt -s nullglob
+          JAR_FILES=(target/*.jar)
+          
+          # Filter out .original files
+          ACTUAL_JAR=""
+          for f in "${JAR_FILES[@]}"; do
+            if [[ "$f" != *.original ]]; then
+              ACTUAL_JAR="$f"
+              break
+            fi
+          done
+          
+          if [[ -z "$ACTUAL_JAR" || ! -f "$ACTUAL_JAR" ]]; then
+            echo "::error::No JAR file found in target directory"
+            ls -la target/
+            exit 1
+          fi
+          
+          FILENAME=$(basename "$ACTUAL_JAR")
+          echo "fullpath=$ACTUAL_JAR" >> $GITHUB_OUTPUT
+          echo "filename=$FILENAME" >> $GITHUB_OUTPUT
+          echo "📦 Detected artifact: $FILENAME"
 
       # --- UPLOAD TO NEXUS ---
       - name: Upload to Nexus
-        if: inputs.artifact_path != ''
+        if: inputs.nexus_url != ''
         id: upload_nexus
         run: |
+          JAR_FILE="${{ steps.detect_artifact.outputs.fullpath }}"
+          FILENAME="${{ steps.detect_artifact.outputs.filename }}"
+          
           GROUP_PATH=$(echo "${{ steps.maven_coords.outputs.group_id }}" | tr '.' '/')
-          ARTIFACT_PATH="${GROUP_PATH}/${{ steps.maven_coords.outputs.artifact_id }}/${{ steps.maven_coords.outputs.version }}/${{ steps.maven_coords.outputs.filename }}"
+          VERSION="${{ steps.maven_coords.outputs.version }}"
+          ARTIFACT_ID="${{ steps.maven_coords.outputs.artifact_id }}"
+          
+          # Use detected filename for the upload path
+          ARTIFACT_PATH="${GROUP_PATH}/${ARTIFACT_ID}/${VERSION}/${FILENAME}"
           FULL_URL="${{ inputs.nexus_url }}/repository/${{ inputs.nexus_repository }}/${ARTIFACT_PATH}"
           
           echo "📤 Uploading to Nexus..."
-          echo "URL: $FULL_URL"
+          echo "   File: $JAR_FILE"
+          echo "   URL: $FULL_URL"
           
-          # Calculate checksums
-          JAR_FILE="target/${{ steps.maven_coords.outputs.filename }}"
-          
+          # Verify file exists
           if [[ ! -f "$JAR_FILE" ]]; then
             echo "::error::Build artifact not found: $JAR_FILE"
             ls -la target/
             exit 1
           fi
           
-          SHA256=$(sha256sum "$JAR_FILE" | awk '{print $1}')
-          SHA1=$(sha1sum "$JAR_FILE" | awk '{print $1}')
-          MD5=$(md5sum "$JAR_FILE" | awk '{print $1}')
-          
-          echo "Checksums calculated:"
-          echo "  SHA256: $SHA256"
-          echo "  SHA1: $SHA1"
-          echo "  MD5: $MD5"
+          FILE_SIZE=$(stat -c%s "$JAR_FILE" 2>/dev/null || stat -f%z "$JAR_FILE")
+          echo "   Size: $FILE_SIZE bytes"
           
           # Upload to Nexus
           HTTP_STATUS=$(curl -s \
@@ -234,7 +241,7 @@ jobs:
             -o response.txt \
             "$FULL_URL")
           
-          echo "HTTP Status: $HTTP_STATUS"
+          echo "   HTTP Status: $HTTP_STATUS"
           
           if [[ "$HTTP_STATUS" -eq 200 || "$HTTP_STATUS" -eq 201 ]]; then
             echo "✅ Upload successful!"
@@ -258,4 +265,18 @@ jobs:
               cat response.txt
             fi
             exit 1
+          fi
+
+      - name: Summary
+        run: |
+          echo "## 📦 Maven Build Summary" >> $GITHUB_STEP_SUMMARY
+          echo "" >> $GITHUB_STEP_SUMMARY
+          echo "| Property | Value |" >> $GITHUB_STEP_SUMMARY
+          echo "|----------|-------|" >> $GITHUB_STEP_SUMMARY
+          echo "| Group ID | ${{ steps.maven_coords.outputs.group_id }} |" >> $GITHUB_STEP_SUMMARY
+          echo "| Artifact ID | ${{ steps.maven_coords.outputs.artifact_id }} |" >> $GITHUB_STEP_SUMMARY
+          echo "| Version | ${{ steps.maven_coords.outputs.version }} |" >> $GITHUB_STEP_SUMMARY
+          echo "| Artifact | ${{ steps.detect_artifact.outputs.filename }} |" >> $GITHUB_STEP_SUMMARY
+          if [[ -n "${{ steps.upload_nexus.outputs.url }}" ]]; then
+            echo "| Nexus URL | ${{ steps.upload_nexus.outputs.url }} |" >> $GITHUB_STEP_SUMMARY
           fi
