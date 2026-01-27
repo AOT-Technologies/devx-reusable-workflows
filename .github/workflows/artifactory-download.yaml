@@ -1,0 +1,212 @@
+name: "Module: Artifactory Download"
+# ------------------------------------------------------------------------------
+# Downloads one or more artifacts from JFrog Artifactory
+# Used by Docker build to get artifacts for containerization
+# Supports multiple artifacts with custom target paths
+# ------------------------------------------------------------------------------
+
+on:
+  workflow_call:
+    inputs:
+      artifactory_url:
+        description: "Artifactory base URL (e.g., https://company.jfrog.io/artifactory)"
+        type: string
+        required: true
+      
+      # Support single or multiple artifacts via JSON array
+      artifacts:
+        description: "JSON array of artifacts to download [{repository, path, target}, ...]"
+        type: string
+        required: true
+        # Example: [{"repository": "libs-snapshot-local", "path": "com/company/app/1.0.0/app.jar", "target": "app.jar"}]
+      
+      download_path:
+        description: "Local directory to download artifacts to"
+        type: string
+        default: "./artifacts"
+      
+      verify_checksums:
+        description: "Verify SHA256 checksums after download"
+        type: boolean
+        default: true
+
+    secrets:
+      ARTIFACTORY_USER:
+        description: "Artifactory username"
+        required: true
+      ARTIFACTORY_TOKEN:
+        description: "Artifactory API token"
+        required: true
+
+    outputs:
+      download_path:
+        description: "Path where artifacts were downloaded"
+        value: ${{ jobs.download.outputs.path }}
+      artifact_count:
+        description: "Number of artifacts downloaded"
+        value: ${{ jobs.download.outputs.count }}
+
+  workflow_dispatch:
+    inputs:
+      artifactory_url:
+        type: string
+        required: true
+      artifacts:
+        type: string
+        required: true
+      download_path:
+        type: string
+        default: "./artifacts"
+      verify_checksums:
+        type: boolean
+        default: true
+
+permissions:
+  contents: read
+
+jobs:
+  download:
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    
+    outputs:
+      path: ${{ steps.setup.outputs.path }}
+      count: ${{ steps.download_artifacts.outputs.count }}
+    
+    steps:
+      - name: Pre-flight Check
+        run: |
+          echo "🔍 Validating Artifactory configuration..."
+          
+          # Check jq is available
+          if ! command -v jq &> /dev/null; then
+            echo "::error::jq is required but not installed"
+            exit 1
+          fi
+          
+          if [[ -z "${{ secrets.ARTIFACTORY_USER }}" || -z "${{ secrets.ARTIFACTORY_TOKEN }}" ]]; then
+            echo "::error::ARTIFACTORY_USER and ARTIFACTORY_TOKEN secrets are required"
+            exit 1
+          fi
+          
+          # Validate JSON
+          echo '${{ inputs.artifacts }}' | jq empty || {
+            echo "::error::Invalid JSON in artifacts input"
+            exit 1
+          }
+          
+          ARTIFACT_COUNT=$(echo '${{ inputs.artifacts }}' | jq '. | length')
+          echo "📦 Artifacts to download: $ARTIFACT_COUNT"
+          echo "✅ Configuration valid"
+      
+      - name: Setup Download Directory
+        id: setup
+        run: |
+          mkdir -p ${{ inputs.download_path }}
+          ABSOLUTE_PATH=$(readlink -f ${{ inputs.download_path }})
+          echo "path=$ABSOLUTE_PATH" >> $GITHUB_OUTPUT
+          echo "📁 Download directory: $ABSOLUTE_PATH"
+
+      - name: Download Artifacts from Artifactory
+        id: download_artifacts
+        run: |
+          echo "📥 Downloading artifacts from Artifactory..."
+          echo ""
+          
+          COUNT=0
+          
+          # Parse artifacts JSON array into bash array (avoids subshell issue)
+          readarray -t ARTIFACT_ARRAY < <(echo '${{ inputs.artifacts }}' | jq -c '.[]')
+          
+          for artifact in "${ARTIFACT_ARRAY[@]}"; do
+            REPO=$(echo "$artifact" | jq -r '.repository')
+            ARTIFACT_PATH=$(echo "$artifact" | jq -r '.path')
+            TARGET=$(echo "$artifact" | jq -r '.target')
+            
+            FULL_URL="${{ inputs.artifactory_url }}/${REPO}/${ARTIFACT_PATH}"
+            LOCAL_PATH="${{ inputs.download_path }}/${TARGET}"
+            
+            echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
+            echo "Artifact #$((COUNT + 1))"
+            echo "Source: $FULL_URL"
+            echo "Target: $LOCAL_PATH"
+            
+            # Create target directory
+            mkdir -p "$(dirname "$LOCAL_PATH")"
+            
+            # Download with progress
+            HTTP_STATUS=$(curl -f -s \
+              -u '${{ secrets.ARTIFACTORY_USER }}:${{ secrets.ARTIFACTORY_TOKEN }}' \
+              -o "$LOCAL_PATH" \
+              -w "%{http_code}" \
+              "$FULL_URL" 2>&1) || HTTP_STATUS="FAILED"
+            
+            if [[ "$HTTP_STATUS" == "200" && -f "$LOCAL_PATH" ]]; then
+              FILE_SIZE=$(stat -c%s "$LOCAL_PATH" 2>/dev/null || stat -f%z "$LOCAL_PATH")
+              FILE_SIZE_MB=$((FILE_SIZE / 1048576))
+              echo "✅ Downloaded: $(basename $LOCAL_PATH)"
+              echo "   Size: ${FILE_SIZE} bytes (~${FILE_SIZE_MB} MB)"
+              
+              # Verify checksum if enabled
+              if [[ "${{ inputs.verify_checksums }}" == "true" ]]; then
+                echo "   Verifying checksum..."
+                
+                # Try to get SHA256 from Artifactory
+                REMOTE_SHA256=$(curl -f -s \
+                  -u '${{ secrets.ARTIFACTORY_USER }}:${{ secrets.ARTIFACTORY_TOKEN }}' \
+                  "${FULL_URL}.sha256" 2>/dev/null || echo "")
+                
+                if [[ -n "$REMOTE_SHA256" ]]; then
+                  LOCAL_SHA256=$(sha256sum "$LOCAL_PATH" | awk '{print $1}')
+                  
+                  if [[ "$LOCAL_SHA256" == "$REMOTE_SHA256" ]]; then
+                    echo "   ✅ Checksum verified"
+                  else
+                    echo "::error::Checksum mismatch for $(basename $LOCAL_PATH)"
+                    echo "   Remote: $REMOTE_SHA256"
+                    echo "   Local:  $LOCAL_SHA256"
+                    exit 1
+                  fi
+                else
+                  echo "   ⚠️  No checksum available, skipping verification"
+                fi
+              fi
+              
+              COUNT=$((COUNT + 1))
+            else
+              echo "::error::Download failed for: $FULL_URL (HTTP $HTTP_STATUS)"
+              exit 1
+            fi
+            echo ""
+          done
+          
+          echo "count=$COUNT" >> $GITHUB_OUTPUT
+          
+          echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
+          echo "✅ Downloaded $COUNT artifact(s) successfully"
+          echo ""
+          echo "📦 Downloaded files:"
+          find ${{ inputs.download_path }} -type f -exec ls -lh {} \;
+
+      - name: Generate Summary
+        if: always()
+        run: |
+          echo "## 📥 Artifactory Download Summary" >> $GITHUB_STEP_SUMMARY
+          echo "" >> $GITHUB_STEP_SUMMARY
+          echo "- **Artifactory URL:** ${{ inputs.artifactory_url }}" >> $GITHUB_STEP_SUMMARY
+          echo "- **Download Path:** ${{ inputs.download_path }}" >> $GITHUB_STEP_SUMMARY
+          echo "- **Artifacts Downloaded:** ${{ steps.download_artifacts.outputs.count }}" >> $GITHUB_STEP_SUMMARY
+          echo "" >> $GITHUB_STEP_SUMMARY
+          
+          if [[ -d "${{ inputs.download_path }}" ]]; then
+            echo "### 📦 Downloaded Files" >> $GITHUB_STEP_SUMMARY
+            echo "\`\`\`" >> $GITHUB_STEP_SUMMARY
+            find ${{ inputs.download_path }} -type f -exec ls -lh {} \; >> $GITHUB_STEP_SUMMARY
+            echo "\`\`\`" >> $GITHUB_STEP_SUMMARY
+          fi
+          
+          if [[ "${{ job.status }}" == "success" ]]; then
+            echo "### ✅ Status: **SUCCESS**" >> $GITHUB_STEP_SUMMARY
+          else
+            echo "### ❌ Status: **FAILED**" >> $GITHUB_STEP_SUMMARY
+          fi

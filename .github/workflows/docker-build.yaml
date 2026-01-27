@@ -4,7 +4,11 @@ name: "Module: Docker Build & Push (Universal)"
 #
 # MODES:
 # 1. 'ecr': Uses AWS OIDC (No keys). Requires 'role_to_assume'.
-# 2. 'generic': Uses Username/Password. Works with Docker Hub, GHCR, Artifactory.
+# 2. 'generic': Uses Username/Password. Works with Docker Hub, GHCR.
+# 3. 'artifactory': Uses Artifactory Docker registry.
+#
+# NOTE: Artifact download from Artifactory should be handled by the 
+# ci-orchestrator using artifactory-download.yaml BEFORE calling this workflow.
 # ------------------------------------------------------------------------------
 
 on:
@@ -30,11 +34,11 @@ on:
 
       # --- REGISTRY STRATEGY ---
       registry_type:
-        description: "Type of registry: 'ecr' or 'generic'"
+        description: "Type of registry: 'ecr', 'generic', or 'artifactory'"
         type: string
         default: "ecr"
       
-      # --- MODE: GENERIC (Docker Hub, GHCR, Artifactory) ---
+      # --- MODE: GENERIC (Docker Hub, GHCR) ---
       registry_url:
         description: "URL of the registry (e.g., 'docker.io', 'ghcr.io'). Required for 'generic'."
         type: string
@@ -50,6 +54,16 @@ on:
         type: string
         default: ""
 
+      # --- MODE: ARTIFACTORY DOCKER REGISTRY ---
+      artifactory_url:
+        description: "Artifactory base URL (Required for 'artifactory')"
+        type: string
+        default: ""
+      artifactory_docker_repo:
+        description: "Artifactory Docker repository name (e.g., docker-local)"
+        type: string
+        default: "docker-local"
+
       # --- BUILD OPTIONS ---
       build_args:
         description: "Build args in KEY=VALUE format, one per line (optional)"
@@ -61,18 +75,18 @@ on:
         default: "linux/amd64"
 
     secrets:
-      # Secrets are only needed for 'generic' mode
+      # Secrets for 'generic' mode
       registry_username:
         description: "Username for Generic Registry"
         required: false
       registry_password:
         description: "Password/Token for Generic Registry"
         required: false
-      # Artifactory Credentials (for Dockerfile download)
-      artifactory_user:
+      # Secrets for 'artifactory' mode
+      ARTIFACTORY_USER:
         description: "Artifactory Username"
         required: false
-      artifactory_token:
+      ARTIFACTORY_TOKEN:
         description: "Artifactory Token"
         required: false
 
@@ -109,6 +123,7 @@ on:
         options:
           - ecr
           - generic
+          - artifactory
         default: "ecr"
       registry_url:
         description: "Registry URL (generic mode)"
@@ -120,6 +135,10 @@ on:
         default: "us-east-1"
       role_to_assume:
         description: "IAM Role ARN (ECR mode)"
+        type: string
+        default: ""
+      artifactory_url:
+        description: "Artifactory URL (artifactory mode)"
         type: string
         default: ""
       build_args:
@@ -178,13 +197,25 @@ jobs:
             fi
           fi
           
+          # Validate Artifactory mode requirements
+          if [[ "${{ inputs.registry_type }}" == "artifactory" ]]; then
+            if [[ -z "${{ inputs.artifactory_url }}" ]]; then
+              echo "::error::ERROR: 'artifactory_url' is required when registry_type is 'artifactory'"
+              exit 1
+            fi
+            if [[ -z "${{ secrets.ARTIFACTORY_USER }}" ]] || [[ -z "${{ secrets.ARTIFACTORY_TOKEN }}" ]]; then
+              echo "::error::ERROR: ARTIFACTORY_USER and ARTIFACTORY_TOKEN secrets are required for artifactory mode"
+              exit 1
+            fi
+          fi
+          
           # Validate registry_type value
-          if [[ "${{ inputs.registry_type }}" != "ecr" ]] && [[ "${{ inputs.registry_type }}" != "generic" ]]; then
-            echo "::error::ERROR: registry_type must be either 'ecr' or 'generic', got: '${{ inputs.registry_type }}'"
+          if [[ "${{ inputs.registry_type }}" != "ecr" ]] && [[ "${{ inputs.registry_type }}" != "generic" ]] && [[ "${{ inputs.registry_type }}" != "artifactory" ]]; then
+            echo "::error::ERROR: registry_type must be 'ecr', 'generic', or 'artifactory', got: '${{ inputs.registry_type }}'"
             exit 1
           fi
           
-          echo "Input validation passed"
+          echo "✅ Input validation passed"
 
       # ------------------------------------------------------------------------
       # STRATEGY A: AWS ECR (OIDC)
@@ -202,7 +233,7 @@ jobs:
         uses: aws-actions/amazon-ecr-login@v2.0.1
 
       # ------------------------------------------------------------------------
-      # STRATEGY B: GENERIC (Docker Hub / GHCR / Artifactory)
+      # STRATEGY B: GENERIC (Docker Hub / GHCR)
       # ------------------------------------------------------------------------
       - name: Login to Generic Registry
         if: inputs.registry_type == 'generic'
@@ -212,6 +243,18 @@ jobs:
           registry: ${{ inputs.registry_url }}
           username: ${{ secrets.registry_username }}
           password: ${{ secrets.registry_password }}
+
+      # ------------------------------------------------------------------------
+      # STRATEGY C: ARTIFACTORY DOCKER REGISTRY
+      # ------------------------------------------------------------------------
+      - name: Login to Artifactory Docker Registry
+        if: inputs.registry_type == 'artifactory'
+        id: login-artifactory
+        uses: docker/login-action@v3.0.0
+        with:
+          registry: ${{ inputs.artifactory_url }}
+          username: ${{ secrets.ARTIFACTORY_USER }}
+          password: ${{ secrets.ARTIFACTORY_TOKEN }}
 
       # ------------------------------------------------------------------------
       # SHARED: SETUP BUILDX
@@ -229,24 +272,22 @@ jobs:
             TAG=$(git rev-parse --short HEAD)
           fi
           
-          # 2. Determine Registry Base URL
-          if [[ "${{ inputs.registry_type }}" == "ecr" ]]; then
+          # 2. Determine Registry Base URL and construct Full URI
+          if [[ "${{ inputs.registry_type }}" == "artifactory" ]]; then
+            REGISTRY="${{ inputs.artifactory_url }}"
+            FULL_URI="${REGISTRY}/${{ inputs.artifactory_docker_repo }}/${{ inputs.image_name }}:$TAG"
+          elif [[ "${{ inputs.registry_type }}" == "ecr" ]]; then
             REGISTRY="${{ steps.login-ecr.outputs.registry }}"
+            FULL_URI="$REGISTRY/${{ inputs.image_name }}:$TAG"
           else
             REGISTRY="${{ inputs.registry_url }}"
-          fi
-          
-          # 3. Construct Full URI with improved Docker Hub handling
-          # FIXED: Always use full registry prefix for consistency
-          if [[ -z "$REGISTRY" ]]; then
-            # No registry specified - default to Docker Hub with explicit prefix
-            FULL_URI="docker.io/${{ inputs.image_name }}:$TAG"
-          elif [[ "$REGISTRY" == "docker.io" ]]; then
-            # Explicitly using Docker Hub - maintain prefix for consistency
-            FULL_URI="docker.io/${{ inputs.image_name }}:$TAG"
-          else
-            # All other registries (GHCR, ECR, Artifactory, etc.)
-            FULL_URI="$REGISTRY/${{ inputs.image_name }}:$TAG"
+            if [[ -z "$REGISTRY" ]]; then
+              FULL_URI="docker.io/${{ inputs.image_name }}:$TAG"
+            elif [[ "$REGISTRY" == "docker.io" ]]; then
+              FULL_URI="docker.io/${{ inputs.image_name }}:$TAG"
+            else
+              FULL_URI="$REGISTRY/${{ inputs.image_name }}:$TAG"
+            fi
           fi
           
           echo "tag=$TAG" >> $GITHUB_OUTPUT
@@ -263,14 +304,6 @@ jobs:
           cat > build_args.txt << 'EOF'
           ${{ inputs.build_args }}
           EOF
-          
-          # Append Artifactory credentials if they exist as secrets
-          if [[ -n "${{ secrets.artifactory_user }}" ]]; then
-            echo "ARTIFACTORY_USER=${{ secrets.artifactory_user }}" >> build_args.txt
-          fi
-          if [[ -n "${{ secrets.artifactory_token }}" ]]; then
-            echo "ARTIFACTORY_TOKEN=${{ secrets.artifactory_token }}" >> build_args.txt
-          fi
           
           # Output the combined build args
           echo "combined_args<<EOF" >> $GITHUB_OUTPUT
@@ -294,7 +327,6 @@ jobs:
           cache-from: type=gha
           cache-to: type=gha,mode=max
           # DOCUMENTED: Provenance disabled for compatibility with older registries
-          # and to reduce image size. Enable for SLSA compliance if registry supports it.
           provenance: false
 
       # ------------------------------------------------------------------------
@@ -305,6 +337,6 @@ jobs:
         run: |
           echo "image_uri=${{ steps.meta.outputs.full_uri }}" >> $GITHUB_OUTPUT
           echo "image_digest=${{ steps.build-push.outputs.digest }}" >> $GITHUB_OUTPUT
-          echo "Image pushed successfully!"
+          echo "✅ Image pushed successfully!"
           echo "URI: ${{ steps.meta.outputs.full_uri }}"
           echo "Digest: ${{ steps.build-push.outputs.digest }}"

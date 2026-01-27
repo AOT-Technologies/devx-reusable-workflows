@@ -1,6 +1,7 @@
 name: "Module: Maven Build"
 # ------------------------------------------------------------------------------
 # Deterministic Maven build with Unit Tests (run before packaging).
+# Uploads directly to Artifactory.
 # ------------------------------------------------------------------------------
 
 on:
@@ -13,7 +14,7 @@ on:
       java_version:
         description: "Java version"
         type: string
-        default: "8"  # Java 17 LTS (recommended)
+        default: "17"
       distribution:
         description: "JDK Distribution"
         type: string
@@ -37,18 +38,49 @@ on:
         # If you need these checks, enable them in your pom.xml or override this input.
         default: "-B clean package -Dmaven.test.skip=true -Dcheckstyle.skip=true -Dpmd.skip=true -Dlicense.skip=true -Dmaven.antrun.skip=true"
       artifact_path:
-        description: "Path to jar/war relative to working_directory. Leave blank to skip."
+        description: "Path to jar/war relative to working_directory."
         type: string
-        default: ""
+        default: "target/*.jar"
       artifact_name:
         description: "Name of the artifact to upload. If blank, a default name will be used."
         type: string
         default: ""
+      
+      # --- ARTIFACTORY INPUTS ---
+      artifactory_url:
+        description: "Artifactory base URL (e.g., https://company.jfrog.io/artifactory)"
+        type: string
+        required: true
+      artifactory_repository:
+        description: "Target repository (e.g., libs-snapshot-local)"
+        type: string
+        default: "libs-snapshot-local"
+
+    secrets:
+      ARTIFACTORY_USER:
+        description: "Artifactory username"
+        required: false
+      ARTIFACTORY_TOKEN:
+        description: "Artifactory API token"
+        required: false
 
     outputs:
-      artifact_name:
-        description: "Name of uploaded artifact (empty if no upload)"
-        value: ${{ jobs.build.outputs.artifact_name }}
+      # --- ARTIFACTORY OUTPUTS ---
+      artifactory_path:
+        description: "Path to artifact in Artifactory"
+        value: ${{ jobs.build.outputs.artifactory_path }}
+      artifact_file:
+        description: "Artifact filename"
+        value: ${{ jobs.build.outputs.artifact_file }}
+      group_id:
+        description: "Maven group ID"
+        value: ${{ jobs.build.outputs.group_id }}
+      artifact_id:
+        description: "Maven artifact ID"
+        value: ${{ jobs.build.outputs.artifact_id }}
+      version:
+        description: "Maven version"
+        value: ${{ jobs.build.outputs.version }}
 
   # Allow manual trigger for testing
   workflow_dispatch:
@@ -85,7 +117,7 @@ on:
       artifact_path:
         description: "Artifact path"
         type: string
-        default: ""
+        default: "target/*.jar"
 
 permissions:
   contents: read
@@ -100,7 +132,11 @@ jobs:
         working-directory: ${{ inputs.working_directory }}
     
     outputs:
-      artifact_name: ${{ steps.set_artifact_name.outputs.artifact_name }}
+      artifactory_path: ${{ steps.upload_artifactory.outputs.path }}
+      artifact_file: ${{ steps.maven_coords.outputs.filename }}
+      group_id: ${{ steps.maven_coords.outputs.group_id }}
+      artifact_id: ${{ steps.maven_coords.outputs.artifact_id }}
+      version: ${{ steps.maven_coords.outputs.version }}
 
     steps:
       - name: Checkout Code
@@ -137,28 +173,93 @@ jobs:
         if: inputs.maven_args != 'none' && inputs.maven_args != ''
         run: mvn ${{ inputs.maven_args }} -f pom.xml
 
-      - name: Determine Artifact Name
-        id: artifact_name
+      # --- EXTRACT MAVEN COORDINATES (NEW) ---
+      - name: Extract Maven Coordinates
+        id: maven_coords
         run: |
-          if [[ -n "${{ inputs.artifact_name }}" ]]; then
-            echo "name=${{ inputs.artifact_name }}" >> $GITHUB_OUTPUT
-          else
-            echo "name=maven-build-${{ github.sha }}" >> $GITHUB_OUTPUT
-          fi
+          GROUP_ID=$(mvn help:evaluate -Dexpression=project.groupId -q -DforceStdout)
+          ARTIFACT_ID=$(mvn help:evaluate -Dexpression=project.artifactId -q -DforceStdout)
+          VERSION=$(mvn help:evaluate -Dexpression=project.version -q -DforceStdout)
+          PACKAGING=$(mvn help:evaluate -Dexpression=project.packaging -q -DforceStdout)
+          
+          FILENAME="${ARTIFACT_ID}-${VERSION}.${PACKAGING}"
+          
+          echo "group_id=$GROUP_ID" >> $GITHUB_OUTPUT
+          echo "artifact_id=$ARTIFACT_ID" >> $GITHUB_OUTPUT
+          echo "version=$VERSION" >> $GITHUB_OUTPUT
+          echo "packaging=$PACKAGING" >> $GITHUB_OUTPUT
+          echo "filename=$FILENAME" >> $GITHUB_OUTPUT
+          
+          echo "📦 Built: $FILENAME"
+          echo "   Group: $GROUP_ID"
+          echo "   Artifact: $ARTIFACT_ID"
+          echo "   Version: $VERSION"
 
-      - name: Upload Build Artifact
+      # --- UPLOAD TO ARTIFACTORY ---
+      - name: Upload to Artifactory
         if: inputs.artifact_path != ''
-        uses: actions/upload-artifact@v4.3.1
-        with:
-          name: ${{ steps.artifact_name.outputs.name }}
-          path: ${{ inputs.working_directory }}/${{ inputs.artifact_path }}
-          retention-days: 90
-
-      - name: Set Artifact Name Output
-        id: set_artifact_name
+        id: upload_artifactory
         run: |
-          if [[ -n "${{ inputs.artifact_path }}" ]]; then
-            echo "artifact_name=${{ steps.artifact_name.outputs.name }}" >> $GITHUB_OUTPUT
+          GROUP_PATH=$(echo "${{ steps.maven_coords.outputs.group_id }}" | tr '.' '/')
+          ARTIFACT_PATH="${GROUP_PATH}/${{ steps.maven_coords.outputs.artifact_id }}/${{ steps.maven_coords.outputs.version }}/${{ steps.maven_coords.outputs.filename }}"
+          FULL_URL="${{ inputs.artifactory_url }}/${{ inputs.artifactory_repository }}/${ARTIFACT_PATH}"
+          
+          echo "📤 Uploading to Artifactory..."
+          echo "URL: $FULL_URL"
+          
+          # Calculate checksums
+          JAR_FILE="target/${{ steps.maven_coords.outputs.filename }}"
+          
+          if [[ ! -f "$JAR_FILE" ]]; then
+            echo "::error::Build artifact not found: $JAR_FILE"
+            ls -la target/
+            exit 1
+          fi
+          
+          SHA256=$(sha256sum "$JAR_FILE" | awk '{print $1}')
+          SHA1=$(sha1sum "$JAR_FILE" | awk '{print $1}')
+          MD5=$(md5sum "$JAR_FILE" | awk '{print $1}')
+          
+          echo "Checksums calculated:"
+          echo "  SHA256: $SHA256"
+          echo "  SHA1: $SHA1"
+          echo "  MD5: $MD5"
+          
+          # Upload with checksums and metadata
+          HTTP_STATUS=$(curl -s \
+            -u '${{ secrets.ARTIFACTORY_USER }}:${{ secrets.ARTIFACTORY_TOKEN }}' \
+            -H "X-Checksum-Sha256: ${SHA256}" \
+            -H "X-Checksum-Sha1: ${SHA1}" \
+            -H "X-Checksum-Md5: ${MD5}" \
+            -H "X-Artifactory-Properties: build.number=${{ github.run_number }};vcs.revision=${{ github.sha }};build.name=${{ github.workflow }}" \
+            -X PUT \
+            -T "$JAR_FILE" \
+            -w "%{http_code}" \
+            -o response.txt \
+            "$FULL_URL")
+          
+          echo "HTTP Status: $HTTP_STATUS"
+          
+          if [[ "$HTTP_STATUS" -eq 200 || "$HTTP_STATUS" -eq 201 ]]; then
+            echo "✅ Upload successful!"
+            echo "path=$ARTIFACT_PATH" >> $GITHUB_OUTPUT
+            echo "url=$FULL_URL" >> $GITHUB_OUTPUT
+            
+            # Verify upload
+            VERIFY_STATUS=$(curl -s -o /dev/null -w "%{http_code}" \
+              -u '${{ secrets.ARTIFACTORY_USER }}:${{ secrets.ARTIFACTORY_TOKEN }}' \
+              "$FULL_URL")
+            
+            if [[ "$VERIFY_STATUS" -eq 200 ]]; then
+              echo "✅ Artifact verified in Artifactory"
+            else
+              echo "::warning::Could not verify artifact (HTTP $VERIFY_STATUS)"
+            fi
           else
-            echo "artifact_name=" >> $GITHUB_OUTPUT
+            echo "::error::Upload failed with status $HTTP_STATUS"
+            if [[ -f response.txt ]]; then
+              echo "Response:"
+              cat response.txt
+            fi
+            exit 1
           fi

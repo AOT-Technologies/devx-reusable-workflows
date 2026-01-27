@@ -1,6 +1,7 @@
 name: "Module: Node Build"
 # ------------------------------------------------------------------------------
 # Deterministic Node.js build with caching, unit tests, artifact upload.
+# Uploads directly to Artifactory
 # ------------------------------------------------------------------------------
 
 on:
@@ -37,11 +38,37 @@ on:
         description: "Name of the artifact to upload. If blank, a default name will be used."
         type: string
         default: ""
+      
+      # --- ARTIFACTORY INPUTS ---
+      artifactory_url:
+        description: "Artifactory base URL (e.g., https://company.jfrog.io/artifactory)"
+        type: string
+        required: true
+      artifactory_repository:
+        description: "Target repository (e.g., npm-local)"
+        type: string
+        default: "npm-local"
+      artifactory_path:
+        description: "Custom upload path in Artifactory (e.g., @org/package/1.0.0/package.tgz)"
+        type: string
+        default: ""
+
+    secrets:
+      ARTIFACTORY_USER:
+        description: "Artifactory username"
+        required: false
+      ARTIFACTORY_TOKEN:
+        description: "Artifactory API token"
+        required: false
 
     outputs:
-      artifact_name:
-        description: "Name of uploaded artifact (empty if no upload)"
-        value: ${{ jobs.build.outputs.artifact_name }}
+      # --- ARTIFACTORY OUTPUTS ---
+      artifactory_path:
+        description: "Path to artifact in Artifactory"
+        value: ${{ jobs.build.outputs.artifactory_upload_path }}
+      artifact_file:
+        description: "Artifact filename"
+        value: ${{ jobs.build.outputs.artifact_file }}
 
   # Allow manual trigger for testing
   workflow_dispatch:
@@ -74,6 +101,10 @@ on:
         description: "Artifact path"
         type: string
         default: ""
+      upload_to_artifactory:
+        description: "Upload to Artifactory"
+        type: boolean
+        default: false
 
 permissions:
   contents: read
@@ -87,7 +118,8 @@ jobs:
       run:
         working-directory: ${{ inputs.working_directory }}
     outputs:
-      artifact_name: ${{ steps.set_artifact_name.outputs.artifact_name }}
+      artifactory_upload_path: ${{ steps.upload_artifactory.outputs.path }}
+      artifact_file: ${{ steps.detect_artifact.outputs.filename }}
     
     steps:
       - name: Checkout Code
@@ -138,28 +170,78 @@ jobs:
             ${{ inputs.build_script }}
           fi
 
-      - name: Determine Artifact Name
-        id: artifact_name
-        run: |
-          if [[ -n "${{ inputs.artifact_name }}" ]]; then
-            echo "name=${{ inputs.artifact_name }}" >> $GITHUB_OUTPUT
-          else
-            echo "name=node-build-${{ github.run_id }}" >> $GITHUB_OUTPUT
-          fi
-
-      - name: Upload Build Artifact
+      # --- DETECT ARTIFACT FILE (NEW) ---
+      - name: Detect Artifact File
         if: inputs.artifact_path != ''
-        uses: actions/upload-artifact@v4.3.1
-        with:
-          name: ${{ steps.artifact_name.outputs.name }}
-          path: ${{ inputs.working_directory }}/${{ inputs.artifact_path }}
-          retention-days: 90
-
-      - name: Set Artifact Name Output
-        id: set_artifact_name
+        id: detect_artifact
         run: |
-          if [[ -n "${{ inputs.artifact_path }}" ]]; then
-            echo "artifact_name=${{ steps.artifact_name.outputs.name }}" >> $GITHUB_OUTPUT
+          # Find the actual file from artifact_path pattern
+          ARTIFACT_FILES=(${{ inputs.artifact_path }})
+          
+          if [[ ${#ARTIFACT_FILES[@]} -eq 0 ]]; then
+            echo "::error::No files found matching pattern: ${{ inputs.artifact_path }}"
+            exit 1
+          fi
+          
+          # Use first file if multiple match
+          ARTIFACT_FILE="${ARTIFACT_FILES[0]}"
+          FILENAME=$(basename "$ARTIFACT_FILE")
+          
+          echo "filename=$FILENAME" >> $GITHUB_OUTPUT
+          echo "fullpath=$ARTIFACT_FILE" >> $GITHUB_OUTPUT
+          echo "📦 Detected artifact: $FILENAME"
+
+      # --- UPLOAD TO ARTIFACTORY ---
+      - name: Upload to Artifactory
+        if: inputs.artifact_path != ''
+        id: upload_artifactory
+        run: |
+          ARTIFACT_FILE="${{ steps.detect_artifact.outputs.fullpath }}"
+          
+          # Determine upload path
+          if [[ -n "${{ inputs.artifactory_path }}" ]]; then
+            UPLOAD_PATH="${{ inputs.artifactory_path }}"
           else
-            echo "artifact_name=" >> $GITHUB_OUTPUT
+            # Default: use filename in generic path
+            UPLOAD_PATH="generic/${{ steps.detect_artifact.outputs.filename }}"
+          fi
+          
+          FULL_URL="${{ inputs.artifactory_url }}/${{ inputs.artifactory_repository }}/${UPLOAD_PATH}"
+          
+          echo "📤 Uploading to Artifactory..."
+          echo "File: $ARTIFACT_FILE"
+          echo "URL: $FULL_URL"
+          
+          # Verify file exists
+          if [[ ! -f "$ARTIFACT_FILE" ]]; then
+            echo "::error::Build artifact not found: $ARTIFACT_FILE"
+            exit 1
+          fi
+          
+          # Calculate checksums
+          SHA256=$(sha256sum "$ARTIFACT_FILE" | awk '{print $1}')
+          SHA1=$(sha1sum "$ARTIFACT_FILE" | awk '{print $1}')
+          MD5=$(md5sum "$ARTIFACT_FILE" | awk '{print $1}')
+          
+          # Upload
+          HTTP_STATUS=$(curl -s \
+            -u '${{ secrets.ARTIFACTORY_USER }}:${{ secrets.ARTIFACTORY_TOKEN }}' \
+            -H "X-Checksum-Sha256: ${SHA256}" \
+            -H "X-Checksum-Sha1: ${SHA1}" \
+            -H "X-Checksum-Md5: ${MD5}" \
+            -H "X-Artifactory-Properties: build.number=${{ github.run_number }};vcs.revision=${{ github.sha }}" \
+            -X PUT \
+            -T "$ARTIFACT_FILE" \
+            -w "%{http_code}" \
+            -o response.txt \
+            "$FULL_URL")
+          
+          if [[ "$HTTP_STATUS" -eq 200 || "$HTTP_STATUS" -eq 201 ]]; then
+            echo "✅ Upload successful!"
+            echo "path=$UPLOAD_PATH" >> $GITHUB_OUTPUT
+            echo "url=$FULL_URL" >> $GITHUB_OUTPUT
+          else
+            echo "::error::Upload failed with status $HTTP_STATUS"
+            cat response.txt
+            exit 1
           fi
