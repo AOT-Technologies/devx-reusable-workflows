@@ -1,7 +1,7 @@
 name: "Module: Maven Build"
 # ------------------------------------------------------------------------------
 # Deterministic Maven build with Unit Tests (run before packaging).
-# Uploads directly to Artifactory.
+# Uploads directly to Nexus.
 # ------------------------------------------------------------------------------
 
 on:
@@ -46,29 +46,29 @@ on:
         type: string
         default: ""
       
-      # --- ARTIFACTORY INPUTS ---
-      artifactory_url:
-        description: "Artifactory base URL (e.g., https://company.jfrog.io/artifactory)"
+      # --- NEXUS INPUTS ---
+      nexus_url:
+        description: "Nexus base URL (e.g., https://nexus.company.com)"
         type: string
         required: true
-      artifactory_repository:
-        description: "Target repository (e.g., libs-snapshot-local)"
+      nexus_repository:
+        description: "Target repository (e.g., maven-releases)"
         type: string
-        default: "libs-snapshot-local"
+        default: "maven-releases"
 
     secrets:
-      ARTIFACTORY_USER:
-        description: "Artifactory username"
+      NEXUS_USERNAME:
+        description: "Nexus username"
         required: false
-      ARTIFACTORY_TOKEN:
-        description: "Artifactory API token"
+      NEXUS_PASSWORD:
+        description: "Nexus password/token"
         required: false
 
     outputs:
-      # --- ARTIFACTORY OUTPUTS ---
-      artifactory_path:
-        description: "Path to artifact in Artifactory"
-        value: ${{ jobs.build.outputs.artifactory_path }}
+      # --- NEXUS OUTPUTS ---
+      nexus_path:
+        description: "Path to artifact in Nexus"
+        value: ${{ jobs.build.outputs.nexus_path }}
       artifact_file:
         description: "Artifact filename"
         value: ${{ jobs.build.outputs.artifact_file }}
@@ -132,7 +132,7 @@ jobs:
         working-directory: ${{ inputs.working_directory }}
     
     outputs:
-      artifactory_path: ${{ steps.upload_artifactory.outputs.path }}
+      nexus_path: ${{ steps.upload_nexus.outputs.path }}
       artifact_file: ${{ steps.maven_coords.outputs.filename }}
       group_id: ${{ steps.maven_coords.outputs.group_id }}
       artifact_id: ${{ steps.maven_coords.outputs.artifact_id }}
@@ -173,7 +173,7 @@ jobs:
         if: inputs.maven_args != 'none' && inputs.maven_args != ''
         run: mvn ${{ inputs.maven_args }} -f pom.xml
 
-      # --- EXTRACT MAVEN COORDINATES (NEW) ---
+      # --- EXTRACT MAVEN COORDINATES ---
       - name: Extract Maven Coordinates
         id: maven_coords
         run: |
@@ -195,16 +195,16 @@ jobs:
           echo "   Artifact: $ARTIFACT_ID"
           echo "   Version: $VERSION"
 
-      # --- UPLOAD TO ARTIFACTORY ---
-      - name: Upload to Artifactory
+      # --- UPLOAD TO NEXUS ---
+      - name: Upload to Nexus
         if: inputs.artifact_path != ''
-        id: upload_artifactory
+        id: upload_nexus
         run: |
           GROUP_PATH=$(echo "${{ steps.maven_coords.outputs.group_id }}" | tr '.' '/')
           ARTIFACT_PATH="${GROUP_PATH}/${{ steps.maven_coords.outputs.artifact_id }}/${{ steps.maven_coords.outputs.version }}/${{ steps.maven_coords.outputs.filename }}"
-          FULL_URL="${{ inputs.artifactory_url }}/${{ inputs.artifactory_repository }}/${ARTIFACT_PATH}"
+          FULL_URL="${{ inputs.nexus_url }}/repository/${{ inputs.nexus_repository }}/${ARTIFACT_PATH}"
           
-          echo "📤 Uploading to Artifactory..."
+          echo "📤 Uploading to Nexus..."
           echo "URL: $FULL_URL"
           
           # Calculate checksums
@@ -225,13 +225,9 @@ jobs:
           echo "  SHA1: $SHA1"
           echo "  MD5: $MD5"
           
-          # Upload with checksums and metadata
+          # Upload to Nexus
           HTTP_STATUS=$(curl -s \
-            -u '${{ secrets.ARTIFACTORY_USER }}:${{ secrets.ARTIFACTORY_TOKEN }}' \
-            -H "X-Checksum-Sha256: ${SHA256}" \
-            -H "X-Checksum-Sha1: ${SHA1}" \
-            -H "X-Checksum-Md5: ${MD5}" \
-            -H "X-Artifactory-Properties: build.number=${{ github.run_number }};vcs.revision=${{ github.sha }};build.name=${{ github.workflow }}" \
+            -u '${{ secrets.NEXUS_USERNAME }}:${{ secrets.NEXUS_PASSWORD }}' \
             -X PUT \
             -T "$JAR_FILE" \
             -w "%{http_code}" \
@@ -247,11 +243,11 @@ jobs:
             
             # Verify upload
             VERIFY_STATUS=$(curl -s -o /dev/null -w "%{http_code}" \
-              -u '${{ secrets.ARTIFACTORY_USER }}:${{ secrets.ARTIFACTORY_TOKEN }}' \
+              -u '${{ secrets.NEXUS_USERNAME }}:${{ secrets.NEXUS_PASSWORD }}' \
               "$FULL_URL")
             
             if [[ "$VERIFY_STATUS" -eq 200 ]]; then
-              echo "✅ Artifact verified in Artifactory"
+              echo "✅ Artifact verified in Nexus"
             else
               echo "::warning::Could not verify artifact (HTTP $VERIFY_STATUS)"
             fi

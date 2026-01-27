@@ -1,7 +1,7 @@
 name: "Module: Node Build"
 # ------------------------------------------------------------------------------
 # Deterministic Node.js build with caching, unit tests, artifact upload.
-# Uploads directly to Artifactory
+# Uploads directly to Nexus
 # ------------------------------------------------------------------------------
 
 on:
@@ -39,33 +39,33 @@ on:
         type: string
         default: ""
       
-      # --- ARTIFACTORY INPUTS ---
-      artifactory_url:
-        description: "Artifactory base URL (e.g., https://company.jfrog.io/artifactory)"
+      # --- NEXUS INPUTS ---
+      nexus_url:
+        description: "Nexus base URL (e.g., https://nexus.company.com)"
         type: string
         required: true
-      artifactory_repository:
-        description: "Target repository (e.g., npm-local)"
+      nexus_repository:
+        description: "Target repository (e.g., raw-releases)"
         type: string
-        default: "npm-local"
-      artifactory_path:
-        description: "Custom upload path in Artifactory (e.g., @org/package/1.0.0/package.tgz)"
+        default: "raw-releases"
+      nexus_path:
+        description: "Custom upload path in Nexus (e.g., @org/package/1.0.0/package.tgz)"
         type: string
         default: ""
 
     secrets:
-      ARTIFACTORY_USER:
-        description: "Artifactory username"
+      NEXUS_USERNAME:
+        description: "Nexus username"
         required: false
-      ARTIFACTORY_TOKEN:
-        description: "Artifactory API token"
+      NEXUS_PASSWORD:
+        description: "Nexus password/token"
         required: false
 
     outputs:
-      # --- ARTIFACTORY OUTPUTS ---
-      artifactory_path:
-        description: "Path to artifact in Artifactory"
-        value: ${{ jobs.build.outputs.artifactory_upload_path }}
+      # --- NEXUS OUTPUTS ---
+      nexus_path:
+        description: "Path to artifact in Nexus"
+        value: ${{ jobs.build.outputs.nexus_upload_path }}
       artifact_file:
         description: "Artifact filename"
         value: ${{ jobs.build.outputs.artifact_file }}
@@ -101,8 +101,8 @@ on:
         description: "Artifact path"
         type: string
         default: ""
-      upload_to_artifactory:
-        description: "Upload to Artifactory"
+      upload_to_nexus:
+        description: "Upload to Nexus"
         type: boolean
         default: false
 
@@ -118,7 +118,7 @@ jobs:
       run:
         working-directory: ${{ inputs.working_directory }}
     outputs:
-      artifactory_upload_path: ${{ steps.upload_artifactory.outputs.path }}
+      nexus_upload_path: ${{ steps.upload_nexus.outputs.path }}
       artifact_file: ${{ steps.detect_artifact.outputs.filename }}
     
     steps:
@@ -170,7 +170,7 @@ jobs:
             ${{ inputs.build_script }}
           fi
 
-      # --- DETECT ARTIFACT FILE (NEW) ---
+      # --- DETECT ARTIFACT FILE ---
       - name: Detect Artifact File
         if: inputs.artifact_path != ''
         id: detect_artifact
@@ -191,24 +191,24 @@ jobs:
           echo "fullpath=$ARTIFACT_FILE" >> $GITHUB_OUTPUT
           echo "📦 Detected artifact: $FILENAME"
 
-      # --- UPLOAD TO ARTIFACTORY ---
-      - name: Upload to Artifactory
+      # --- UPLOAD TO NEXUS ---
+      - name: Upload to Nexus
         if: inputs.artifact_path != ''
-        id: upload_artifactory
+        id: upload_nexus
         run: |
           ARTIFACT_FILE="${{ steps.detect_artifact.outputs.fullpath }}"
           
           # Determine upload path
-          if [[ -n "${{ inputs.artifactory_path }}" ]]; then
-            UPLOAD_PATH="${{ inputs.artifactory_path }}"
+          if [[ -n "${{ inputs.nexus_path }}" ]]; then
+            UPLOAD_PATH="${{ inputs.nexus_path }}"
           else
             # Default: use filename in generic path
             UPLOAD_PATH="generic/${{ steps.detect_artifact.outputs.filename }}"
           fi
           
-          FULL_URL="${{ inputs.artifactory_url }}/${{ inputs.artifactory_repository }}/${UPLOAD_PATH}"
+          FULL_URL="${{ inputs.nexus_url }}/repository/${{ inputs.nexus_repository }}/${UPLOAD_PATH}"
           
-          echo "📤 Uploading to Artifactory..."
+          echo "📤 Uploading to Nexus..."
           echo "File: $ARTIFACT_FILE"
           echo "URL: $FULL_URL"
           
@@ -218,18 +218,9 @@ jobs:
             exit 1
           fi
           
-          # Calculate checksums
-          SHA256=$(sha256sum "$ARTIFACT_FILE" | awk '{print $1}')
-          SHA1=$(sha1sum "$ARTIFACT_FILE" | awk '{print $1}')
-          MD5=$(md5sum "$ARTIFACT_FILE" | awk '{print $1}')
-          
-          # Upload
+          # Upload to Nexus
           HTTP_STATUS=$(curl -s \
-            -u '${{ secrets.ARTIFACTORY_USER }}:${{ secrets.ARTIFACTORY_TOKEN }}' \
-            -H "X-Checksum-Sha256: ${SHA256}" \
-            -H "X-Checksum-Sha1: ${SHA1}" \
-            -H "X-Checksum-Md5: ${MD5}" \
-            -H "X-Artifactory-Properties: build.number=${{ github.run_number }};vcs.revision=${{ github.sha }}" \
+            -u '${{ secrets.NEXUS_USERNAME }}:${{ secrets.NEXUS_PASSWORD }}' \
             -X PUT \
             -T "$ARTIFACT_FILE" \
             -w "%{http_code}" \

@@ -1,6 +1,6 @@
-name: "Module: Artifactory Download"
+name: "Module: Nexus Download"
 # ------------------------------------------------------------------------------
-# Downloads one or more artifacts from JFrog Artifactory
+# Downloads one or more artifacts from Sonatype Nexus Repository Manager
 # Used by Docker build to get artifacts for containerization
 # Supports multiple artifacts with custom target paths
 # ------------------------------------------------------------------------------
@@ -8,8 +8,8 @@ name: "Module: Artifactory Download"
 on:
   workflow_call:
     inputs:
-      artifactory_url:
-        description: "Artifactory base URL (e.g., https://company.jfrog.io/artifactory)"
+      nexus_url:
+        description: "Nexus base URL (e.g., https://nexus.company.com)"
         type: string
         required: true
       
@@ -18,7 +18,7 @@ on:
         description: "JSON array of artifacts to download [{repository, path, target}, ...]"
         type: string
         required: true
-        # Example: [{"repository": "libs-snapshot-local", "path": "com/company/app/1.0.0/app.jar", "target": "app.jar"}]
+        # Example: [{"repository": "maven-releases", "path": "com/company/app/1.0.0/app.jar", "target": "app.jar"}]
       
       download_path:
         description: "Local directory to download artifacts to"
@@ -31,11 +31,11 @@ on:
         default: true
 
     secrets:
-      ARTIFACTORY_USER:
-        description: "Artifactory username"
+      NEXUS_USERNAME:
+        description: "Nexus username"
         required: true
-      ARTIFACTORY_TOKEN:
-        description: "Artifactory API token"
+      NEXUS_PASSWORD:
+        description: "Nexus password/token"
         required: true
 
     outputs:
@@ -48,7 +48,7 @@ on:
 
   workflow_dispatch:
     inputs:
-      artifactory_url:
+      nexus_url:
         type: string
         required: true
       artifacts:
@@ -76,7 +76,7 @@ jobs:
     steps:
       - name: Pre-flight Check
         run: |
-          echo "🔍 Validating Artifactory configuration..."
+          echo "🔍 Validating Nexus configuration..."
           
           # Check jq is available
           if ! command -v jq &> /dev/null; then
@@ -84,8 +84,8 @@ jobs:
             exit 1
           fi
           
-          if [[ -z "${{ secrets.ARTIFACTORY_USER }}" || -z "${{ secrets.ARTIFACTORY_TOKEN }}" ]]; then
-            echo "::error::ARTIFACTORY_USER and ARTIFACTORY_TOKEN secrets are required"
+          if [[ -z "${{ secrets.NEXUS_USERNAME }}" || -z "${{ secrets.NEXUS_PASSWORD }}" ]]; then
+            echo "::error::NEXUS_USERNAME and NEXUS_PASSWORD secrets are required"
             exit 1
           fi
           
@@ -107,10 +107,10 @@ jobs:
           echo "path=$ABSOLUTE_PATH" >> $GITHUB_OUTPUT
           echo "📁 Download directory: $ABSOLUTE_PATH"
 
-      - name: Download Artifacts from Artifactory
+      - name: Download Artifacts from Nexus
         id: download_artifacts
         run: |
-          echo "📥 Downloading artifacts from Artifactory..."
+          echo "📥 Downloading artifacts from Nexus..."
           echo ""
           
           COUNT=0
@@ -123,7 +123,7 @@ jobs:
             ARTIFACT_PATH=$(echo "$artifact" | jq -r '.path')
             TARGET=$(echo "$artifact" | jq -r '.target')
             
-            FULL_URL="${{ inputs.artifactory_url }}/${REPO}/${ARTIFACT_PATH}"
+            FULL_URL="${{ inputs.nexus_url }}/repository/${REPO}/${ARTIFACT_PATH}"
             LOCAL_PATH="${{ inputs.download_path }}/${TARGET}"
             
             echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
@@ -136,7 +136,7 @@ jobs:
             
             # Download with progress
             HTTP_STATUS=$(curl -f -s \
-              -u '${{ secrets.ARTIFACTORY_USER }}:${{ secrets.ARTIFACTORY_TOKEN }}' \
+              -u '${{ secrets.NEXUS_USERNAME }}:${{ secrets.NEXUS_PASSWORD }}' \
               -o "$LOCAL_PATH" \
               -w "%{http_code}" \
               "$FULL_URL" 2>&1) || HTTP_STATUS="FAILED"
@@ -151,9 +151,9 @@ jobs:
               if [[ "${{ inputs.verify_checksums }}" == "true" ]]; then
                 echo "   Verifying checksum..."
                 
-                # Try to get SHA256 from Artifactory
+                # Try to get SHA256 from Nexus
                 REMOTE_SHA256=$(curl -f -s \
-                  -u '${{ secrets.ARTIFACTORY_USER }}:${{ secrets.ARTIFACTORY_TOKEN }}' \
+                  -u '${{ secrets.NEXUS_USERNAME }}:${{ secrets.NEXUS_PASSWORD }}' \
                   "${FULL_URL}.sha256" 2>/dev/null || echo "")
                 
                 if [[ -n "$REMOTE_SHA256" ]]; then
@@ -191,9 +191,9 @@ jobs:
       - name: Generate Summary
         if: always()
         run: |
-          echo "## 📥 Artifactory Download Summary" >> $GITHUB_STEP_SUMMARY
+          echo "## 📥 Nexus Download Summary" >> $GITHUB_STEP_SUMMARY
           echo "" >> $GITHUB_STEP_SUMMARY
-          echo "- **Artifactory URL:** ${{ inputs.artifactory_url }}" >> $GITHUB_STEP_SUMMARY
+          echo "- **Nexus URL:** ${{ inputs.nexus_url }}" >> $GITHUB_STEP_SUMMARY
           echo "- **Download Path:** ${{ inputs.download_path }}" >> $GITHUB_STEP_SUMMARY
           echo "- **Artifacts Downloaded:** ${{ steps.download_artifacts.outputs.count }}" >> $GITHUB_STEP_SUMMARY
           echo "" >> $GITHUB_STEP_SUMMARY

@@ -5,10 +5,10 @@ name: "Module: Docker Build & Push (Universal)"
 # MODES:
 # 1. 'ecr': Uses AWS OIDC (No keys). Requires 'role_to_assume'.
 # 2. 'generic': Uses Username/Password. Works with Docker Hub, GHCR.
-# 3. 'artifactory': Uses Artifactory Docker registry.
+# 3. 'nexus': Uses Nexus Docker registry.
 #
-# NOTE: Artifact download from Artifactory should be handled by the 
-# ci-orchestrator using artifactory-download.yaml BEFORE calling this workflow.
+# NOTE: Artifact download from Nexus should be handled by the 
+# ci-orchestrator using nexus-download.yaml BEFORE calling this workflow.
 # ------------------------------------------------------------------------------
 
 on:
@@ -34,7 +34,7 @@ on:
 
       # --- REGISTRY STRATEGY ---
       registry_type:
-        description: "Type of registry: 'ecr', 'generic', or 'artifactory'"
+        description: "Type of registry: 'ecr', 'generic', or 'nexus'"
         type: string
         default: "ecr"
       
@@ -54,15 +54,15 @@ on:
         type: string
         default: ""
 
-      # --- MODE: ARTIFACTORY DOCKER REGISTRY ---
-      artifactory_url:
-        description: "Artifactory base URL (Required for 'artifactory')"
+      # --- MODE: NEXUS DOCKER REGISTRY ---
+      nexus_url:
+        description: "Nexus base URL (Required for 'nexus')"
         type: string
         default: ""
-      artifactory_docker_repo:
-        description: "Artifactory Docker repository name (e.g., docker-local)"
+      nexus_docker_repo:
+        description: "Nexus Docker repository name (e.g., docker-hosted)"
         type: string
-        default: "docker-local"
+        default: "docker-hosted"
 
       # --- BUILD OPTIONS ---
       build_args:
@@ -82,12 +82,12 @@ on:
       registry_password:
         description: "Password/Token for Generic Registry"
         required: false
-      # Secrets for 'artifactory' mode
-      ARTIFACTORY_USER:
-        description: "Artifactory Username"
+      # Secrets for 'nexus' mode
+      NEXUS_USERNAME:
+        description: "Nexus Username"
         required: false
-      ARTIFACTORY_TOKEN:
-        description: "Artifactory Token"
+      NEXUS_PASSWORD:
+        description: "Nexus Password/Token"
         required: false
 
     outputs:
@@ -123,7 +123,7 @@ on:
         options:
           - ecr
           - generic
-          - artifactory
+          - nexus
         default: "ecr"
       registry_url:
         description: "Registry URL (generic mode)"
@@ -137,8 +137,8 @@ on:
         description: "IAM Role ARN (ECR mode)"
         type: string
         default: ""
-      artifactory_url:
-        description: "Artifactory URL (artifactory mode)"
+      nexus_url:
+        description: "Nexus URL (nexus mode)"
         type: string
         default: ""
       build_args:
@@ -197,21 +197,21 @@ jobs:
             fi
           fi
           
-          # Validate Artifactory mode requirements
-          if [[ "${{ inputs.registry_type }}" == "artifactory" ]]; then
-            if [[ -z "${{ inputs.artifactory_url }}" ]]; then
-              echo "::error::ERROR: 'artifactory_url' is required when registry_type is 'artifactory'"
+          # Validate Nexus mode requirements
+          if [[ "${{ inputs.registry_type }}" == "nexus" ]]; then
+            if [[ -z "${{ inputs.nexus_url }}" ]]; then
+              echo "::error::ERROR: 'nexus_url' is required when registry_type is 'nexus'"
               exit 1
             fi
-            if [[ -z "${{ secrets.ARTIFACTORY_USER }}" ]] || [[ -z "${{ secrets.ARTIFACTORY_TOKEN }}" ]]; then
-              echo "::error::ERROR: ARTIFACTORY_USER and ARTIFACTORY_TOKEN secrets are required for artifactory mode"
+            if [[ -z "${{ secrets.NEXUS_USERNAME }}" ]] || [[ -z "${{ secrets.NEXUS_PASSWORD }}" ]]; then
+              echo "::error::ERROR: NEXUS_USERNAME and NEXUS_PASSWORD secrets are required for nexus mode"
               exit 1
             fi
           fi
           
           # Validate registry_type value
-          if [[ "${{ inputs.registry_type }}" != "ecr" ]] && [[ "${{ inputs.registry_type }}" != "generic" ]] && [[ "${{ inputs.registry_type }}" != "artifactory" ]]; then
-            echo "::error::ERROR: registry_type must be 'ecr', 'generic', or 'artifactory', got: '${{ inputs.registry_type }}'"
+          if [[ "${{ inputs.registry_type }}" != "ecr" ]] && [[ "${{ inputs.registry_type }}" != "generic" ]] && [[ "${{ inputs.registry_type }}" != "nexus" ]]; then
+            echo "::error::ERROR: registry_type must be 'ecr', 'generic', or 'nexus', got: '${{ inputs.registry_type }}'"
             exit 1
           fi
           
@@ -245,16 +245,16 @@ jobs:
           password: ${{ secrets.registry_password }}
 
       # ------------------------------------------------------------------------
-      # STRATEGY C: ARTIFACTORY DOCKER REGISTRY
+      # STRATEGY C: NEXUS DOCKER REGISTRY
       # ------------------------------------------------------------------------
-      - name: Login to Artifactory Docker Registry
-        if: inputs.registry_type == 'artifactory'
-        id: login-artifactory
+      - name: Login to Nexus Docker Registry
+        if: inputs.registry_type == 'nexus'
+        id: login-nexus
         uses: docker/login-action@v3.0.0
         with:
-          registry: ${{ inputs.artifactory_url }}
-          username: ${{ secrets.ARTIFACTORY_USER }}
-          password: ${{ secrets.ARTIFACTORY_TOKEN }}
+          registry: ${{ inputs.nexus_url }}
+          username: ${{ secrets.NEXUS_USERNAME }}
+          password: ${{ secrets.NEXUS_PASSWORD }}
 
       # ------------------------------------------------------------------------
       # SHARED: SETUP BUILDX
@@ -273,9 +273,9 @@ jobs:
           fi
           
           # 2. Determine Registry Base URL and construct Full URI
-          if [[ "${{ inputs.registry_type }}" == "artifactory" ]]; then
-            REGISTRY="${{ inputs.artifactory_url }}"
-            FULL_URI="${REGISTRY}/${{ inputs.artifactory_docker_repo }}/${{ inputs.image_name }}:$TAG"
+          if [[ "${{ inputs.registry_type }}" == "nexus" ]]; then
+            REGISTRY="${{ inputs.nexus_url }}"
+            FULL_URI="${REGISTRY}/${{ inputs.nexus_docker_repo }}/${{ inputs.image_name }}:$TAG"
           elif [[ "${{ inputs.registry_type }}" == "ecr" ]]; then
             REGISTRY="${{ steps.login-ecr.outputs.registry }}"
             FULL_URI="$REGISTRY/${{ inputs.image_name }}:$TAG"
