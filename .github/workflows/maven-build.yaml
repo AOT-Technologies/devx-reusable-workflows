@@ -208,18 +208,23 @@ jobs:
         id: upload_nexus
         run: |
           JAR_FILE="${{ steps.detect_artifact.outputs.fullpath }}"
-          FILENAME="${{ steps.detect_artifact.outputs.filename }}"
           
           GROUP_PATH=$(echo "${{ steps.maven_coords.outputs.group_id }}" | tr '.' '/')
           VERSION="${{ steps.maven_coords.outputs.version }}"
           ARTIFACT_ID="${{ steps.maven_coords.outputs.artifact_id }}"
+          PACKAGING="${{ steps.maven_coords.outputs.packaging }}"
           
-          # Use detected filename for the upload path
-          ARTIFACT_PATH="${GROUP_PATH}/${ARTIFACT_ID}/${VERSION}/${FILENAME}"
+          # CRITICAL: For Maven 2 repositories, the path MUST follow the layout:
+          # [groupId path]/[artifactId]/[version]/[artifactId]-[version].[extension]
+          # Nexus will reject uploads that don't match this layout with a 400 error.
+          REMOTE_FILENAME="${ARTIFACT_ID}-${VERSION}.${PACKAGING}"
+          
+          ARTIFACT_PATH="${GROUP_PATH}/${ARTIFACT_ID}/${VERSION}/${REMOTE_FILENAME}"
           FULL_URL="${{ inputs.nexus_url }}/repository/${{ inputs.nexus_repository }}/${ARTIFACT_PATH}"
           
           echo "📤 Uploading to Nexus..."
-          echo "   File: $JAR_FILE"
+          echo "   Local File: $JAR_FILE"
+          echo "   Remote Path: $ARTIFACT_PATH"
           echo "   URL: $FULL_URL"
           
           # Verify file exists
@@ -276,7 +281,8 @@ jobs:
           echo "| Group ID | ${{ steps.maven_coords.outputs.group_id }} |" >> $GITHUB_STEP_SUMMARY
           echo "| Artifact ID | ${{ steps.maven_coords.outputs.artifact_id }} |" >> $GITHUB_STEP_SUMMARY
           echo "| Version | ${{ steps.maven_coords.outputs.version }} |" >> $GITHUB_STEP_SUMMARY
-          echo "| Artifact | ${{ steps.detect_artifact.outputs.filename }} |" >> $GITHUB_STEP_SUMMARY
+          echo "| Local File | ${{ steps.detect_artifact.outputs.filename }} |" >> $GITHUB_STEP_SUMMARY
           if [[ -n "${{ steps.upload_nexus.outputs.url }}" ]]; then
+            echo "| Remote Path | ${{ steps.upload_nexus.outputs.path }} |" >> $GITHUB_STEP_SUMMARY
             echo "| Nexus URL | ${{ steps.upload_nexus.outputs.url }} |" >> $GITHUB_STEP_SUMMARY
           fi
