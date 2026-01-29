@@ -219,13 +219,23 @@ jobs:
             CLEAN_URL=$(echo "${{ inputs.nexus_url }}" | sed 's|/*$||')
             REGISTRY_URL="${CLEAN_URL}/repository/${{ inputs.nexus_repository }}/"
             
-            # Configure npm for Nexus using .npmrc for better scoped auth support
-            # Remove protocol (http/https) for the auth key to leave the // prefix
+            # Remove protocol for the auth key
             AUTH_KEY=$(echo "$REGISTRY_URL" | sed 's|^https:||' | sed 's|^http:||')
             
-            # Create base64 auth (using printf and base64 -w 0 for robustness)
+            # Create base64 auth
             AUTH=$(printf "%s:%s" "${{ secrets.NEXUS_USERNAME }}" "${{ secrets.NEXUS_PASSWORD }}" | base64 -w 0)
             
+            # Verify credentials with curl first
+            echo "🔍 Verifying credentials with curl..."
+            HTTP_STATUS=$(curl -s -o /dev/null -w "%{http_code}" -u "${{ secrets.NEXUS_USERNAME }}:${{ secrets.NEXUS_PASSWORD }}" "$REGISTRY_URL")
+            if [[ "$HTTP_STATUS" -eq 200 || "$HTTP_STATUS" -eq 404 ]]; then
+              echo "✅ Credentials verified (HTTP $HTTP_STATUS)"
+            else
+              echo "::error::Credential verification failed with HTTP $HTTP_STATUS. Please check NEXUS_USERNAME and NEXUS_PASSWORD secrets."
+              exit 1
+            fi
+            
+            # Generate .npmrc
             echo "registry=$REGISTRY_URL" > .npmrc
             echo "${AUTH_KEY}:_auth=$AUTH" >> .npmrc
             echo "${AUTH_KEY}:always-auth=true" >> .npmrc
@@ -238,17 +248,13 @@ jobs:
             npm publish
             
             # Construct the download path for docker-build.yaml
-            # Nexus NPM path: [package-name]/-/[package-name-without-scope]-[version].tgz
             PKG_NAME=$(node -p "require('./package.json').name")
             PKG_VERSION=$(node -p "require('./package.json').version")
-            
-            # Get the filename that npm pack would generate
             FILENAME=$(npm pack --dry-run | tail -n 1)
             
             echo "path=${PKG_NAME}/-/${FILENAME}" >> $GITHUB_OUTPUT
             echo "filename=${FILENAME}" >> $GITHUB_OUTPUT
             echo "✅ Published successfully to NPM registry"
-            echo "Download Path: ${PKG_NAME}/-/${FILENAME}"
             
           else
             echo "📤 Uploading to RAW repository..."
@@ -286,17 +292,6 @@ jobs:
               echo "✅ Upload successful!"
               echo "path=$UPLOAD_PATH" >> $GITHUB_OUTPUT
               echo "url=$FULL_URL" >> $GITHUB_OUTPUT
-              
-              # Verify upload
-              VERIFY_STATUS=$(curl -s -o /dev/null -w "%{http_code}" \
-                -u '${{ secrets.NEXUS_USERNAME }}:${{ secrets.NEXUS_PASSWORD }}' \
-                "$FULL_URL")
-              
-              if [[ "$VERIFY_STATUS" -eq 200 ]]; then
-                echo "✅ Artifact verified in Nexus"
-              else
-                echo "::warning::Could not verify artifact (HTTP $VERIFY_STATUS)"
-              fi
             else
               echo "::error::Upload failed with status $HTTP_STATUS"
               cat response.txt
