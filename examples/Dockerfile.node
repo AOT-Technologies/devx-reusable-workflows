@@ -1,45 +1,28 @@
-# =============================================================================
-# Dockerfile for Node.js Application with Artifactory Integration
-# =============================================================================
+# Optimized Node.js Dockerfile for DevX Pipeline
 FROM node:20-alpine AS builder
 
 WORKDIR /app
 
-ARG ARTIFACTORY_URL=""
-ARG ARTIFACTORY_REPO=""
-ARG ARTIFACT_PATH=""
-ARG ARTIFACTORY_USER=""
-ARG ARTIFACTORY_TOKEN=""
-ARG BUILD_MODE="false"
+# The artifact is downloaded by the CI pipeline.
+ARG ARTIFACT_NAME
+COPY ${ARTIFACT_NAME} ./
 
-# Copy package files
-COPY package*.json ./
+# Extract and prepare
+RUN tar -xzf ${ARTIFACT_NAME} --strip-components=1 && rm ${ARTIFACT_NAME}
 
-# Install curl for Artifactory download
-RUN apk add --no-cache curl
-
-RUN if [ "$BUILD_MODE" = "true" ] || [ -z "$ARTIFACTORY_URL" ]; then \
-      echo "🔨 BUILD MODE: Building locally..." && \
-      npm ci && \
-      npm run build; \
-    else \
-      echo "📦 ARTIFACTORY MODE: Downloading from Artifactory..." && \
-      FULL_URL="${ARTIFACTORY_URL}/${ARTIFACTORY_REPO}/${ARTIFACT_PATH}" && \
-      if [ -n "$ARTIFACTORY_USER" ] && [ -n "$ARTIFACTORY_TOKEN" ]; then \
-        curl -s -u "$ARTIFACTORY_USER:$ARTIFACTORY_TOKEN" -o app-dist.tgz "$FULL_URL"; \
-      else \
-        curl -s -o app-dist.tgz "$FULL_URL"; \
-      fi && \
-      tar -xzf app-dist.tgz && \
-      rm app-dist.tgz; \
-    fi
-
-# --- Runtime Stage ---
+# Production stage
 FROM node:20-alpine
+RUN apk add --no-cache dumb-init curl
 WORKDIR /app
+
+# Copy from builder
 COPY --from=builder /app/dist ./dist
 COPY --from=builder /app/package*.json ./
-RUN npm ci --production
-USER node
+
+# Install production dependencies
+RUN npm install --omit=dev
+
 EXPOSE 3000
+HEALTHCHECK CMD curl -f http://localhost:3000/health || exit 1
+ENTRYPOINT ["dumb-init", "--"]
 CMD ["node", "dist/index.js"]

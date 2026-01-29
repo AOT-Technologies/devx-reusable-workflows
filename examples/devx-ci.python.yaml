@@ -1,22 +1,26 @@
+# Example DevX CI Config for Python
 project:
   language: python
   version: "3.11"
 
 build:
-  build_script: "python setup.py bdist_wheel"
+  run_tests: true
+  build_script: "pip install wheel && python setup.py bdist_wheel"
   artifact_path: "dist/*.whl"
 
-artifactory:
-  enabled: true
-  url: "https://your-jfrog-instance.jfrog.io/artifactory"
-  repository: "python-repo-local"
-  artifact_file: "my_app-1.0.0-py3-none-any.whl"
-  upload_path: "my-python-app/1.0.0/my_app-1.0.0-py3-none-any.whl"
+nexus:
+  url: "https://nexus.example.com"
+  repository: "pypi-hosted"
+  repo_type: "pypi"
+  docker_registry_url: "nexus.example.com:8082"
+
+security:
+  sast:
+    enabled: true
+  trivy:
+    enabled: true
 
 docker:
   enabled: true
-  image_name: my-python-app
-  build_args: |
-    ARTIFACTORY_URL=https://your-jfrog-instance.jfrog.io/artifactory
-    ARTIFACTORY_REPO=python-repo-local
-    ARTIFACT_PATH=my-python-app/1.0.0/my_app-1.0.0-py3-none-any.whl
+  image_name: demo-python-app
+  registry_type: nexus

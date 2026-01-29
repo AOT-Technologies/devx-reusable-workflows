@@ -1,41 +1,20 @@
-# =============================================================================
-# Dockerfile for Python Application with Artifactory Integration
-# =============================================================================
-FROM python:3.11-slim AS builder
+# Optimized Python Dockerfile for DevX Pipeline
+FROM python:3.11-alpine AS builder
 
 WORKDIR /app
 
-ARG ARTIFACTORY_URL=""
-ARG ARTIFACTORY_REPO=""
-ARG ARTIFACT_PATH=""
-ARG ARTIFACTORY_USER=""
-ARG ARTIFACTORY_TOKEN=""
-ARG BUILD_MODE="false"
+# The artifact is downloaded by the CI pipeline.
+ARG ARTIFACT_NAME
+COPY ${ARTIFACT_NAME} ./
 
-# Install curl
-RUN apt-get update && apt-get install -y curl && rm -rf /var/lib/apt/lists/*
-
-RUN if [ "$BUILD_MODE" = "true" ] || [ -z "$ARTIFACTORY_URL" ]; then \
-      echo "🔨 BUILD MODE: Building locally..." && \
-      pip install --upgrade pip && \
-      pip install wheel && \
-      pip wheel . -w dist; \
-    else \
-      echo "📦 ARTIFACTORY MODE: Downloading from Artifactory..." && \
-      FULL_URL="${ARTIFACTORY_URL}/${ARTIFACTORY_REPO}/${ARTIFACT_PATH}" && \
-      mkdir dist && \
-      if [ -n "$ARTIFACTORY_USER" ] && [ -n "$ARTIFACTORY_TOKEN" ]; then \
-        curl -s -u "$ARTIFACTORY_USER:$ARTIFACTORY_TOKEN" -o dist/app.whl "$FULL_URL"; \
-      else \
-        curl -s -o dist/app.whl "$FULL_URL"; \
-      fi; \
-    fi
-
-# --- Runtime Stage ---
-FROM python:3.11-slim
+# Runtime stage
+FROM python:3.11-alpine
 WORKDIR /app
-COPY --from=builder /app/dist/*.whl .
-RUN pip install *.whl && rm *.whl
-USER 1000
+
+# Copy wheel from builder and install
+COPY --from=builder /app/*.whl .
+RUN pip install --no-cache-dir *.whl && rm *.whl
+
 EXPOSE 8000
-CMD ["python", "-m", "your_app_module"]
+HEALTHCHECK CMD curl -f http://localhost:8000/health || exit 1
+CMD ["gunicorn", "--bind", "0.0.0.0:8000", "app:app"]

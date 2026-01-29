@@ -1,57 +1,25 @@
-# Multi-stage build for smaller final image
-FROM eclipse-temurin:17-jdk-alpine AS builder
+# Optimized Java Dockerfile for DevX Pipeline
+FROM eclipse-temurin:17-jre-alpine
 
-# Set working directory
+# Security: Create non-root user
+RUN addgroup -S appgroup && adduser -S appuser -G appgroup
+
 WORKDIR /app
 
-# Copy Maven wrapper and pom.xml
-COPY .mvn/ .mvn/
-COPY mvnw pom.xml ./
+# The artifact is downloaded by the CI pipeline.
+ARG ARTIFACT_NAME
+COPY ${ARTIFACT_NAME} app.jar
 
-# Download dependencies (cached layer)
-RUN ./mvnw dependency:go-offline
-
-# Copy source code
-COPY src ./src
-
-# Build application (skip tests - already run in CI)
-RUN ./mvnw package -DskipTests
-
-# Extract layered JAR (Spring Boot 2.3+)
-RUN java -Djarmode=layertools -jar target/*.jar extract
-
-# ============================================
-# Production Stage
-# ============================================
-FROM eclipse-temurin:17-jre-alpine AS production
-
-# Install curl for health checks
-RUN apk add --no-cache curl
-
-# Create non-root user
-RUN addgroup -g 1001 -S spring && adduser -S spring -u 1001 -G spring
-
-# Set working directory
-WORKDIR /app
-
-# Copy extracted layers from builder
-COPY --from=builder --chown=spring:spring /app/dependencies/ ./
-COPY --from=builder --chown=spring:spring /app/spring-boot-loader/ ./
-COPY --from=builder --chown=spring:spring /app/snapshot-dependencies/ ./
-COPY --from=builder --chown=spring:spring /app/application/ ./
+# Set ownership
+RUN chown -R appuser:appgroup /app
 
 # Switch to non-root user
-USER spring
+USER appuser
 
-# Expose port
 EXPOSE 8080
+HEALTHCHECK CMD wget --no-verbose --tries=1 --spider http://localhost:8080/actuator/health || exit 1
 
-# Health check
-HEALTHCHECK --interval=30s --timeout=3s --start-period=40s --retries=3 \
-  CMD curl -f http://localhost:8080/actuator/health || exit 1
+# JVM optimizations for containers
+ENV JAVA_OPTS="-XX:+UseContainerSupport -XX:MaxRAMPercentage=75.0"
 
-# JVM options
-ENV JAVA_OPTS="-Xmx512m -Xms256m -XX:+UseG1GC -XX:MaxGCPauseMillis=200"
-
-# Start application
-ENTRYPOINT ["sh", "-c", "java $JAVA_OPTS org.springframework.boot.loader.JarLauncher"]
+ENTRYPOINT ["sh", "-c", "java $JAVA_OPTS -jar app.jar"]

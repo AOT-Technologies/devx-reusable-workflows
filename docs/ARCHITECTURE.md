@@ -28,18 +28,20 @@ This document provides a deep technical dive into how the DevX reusable workflow
 3. **Language-Agnostic:** Same orchestrator works for Node, Python, Java
 4. **Security-First:** Multiple security gates with fail-fast behavior
 5. **Deterministic:** Version-pinned actions, reproducible builds
+6. **Artifact-Centric:** Nexus is the source of truth for all build outputs
 
 ### **Repository Structure**
 
 ```
 devx-reusable-workflows/
-├── .github/workflows/           # All reusable workflows
+├── .github/workflows/          # All reusable workflows
 │   ├── ci-orchestrator.yaml    # The Brain (orchestrates everything)
 │   ├── node-build.yaml         # Language-specific builds
 │   ├── python-build.yaml
 │   ├── maven-build.yaml
 │   ├── docker-build.yaml       # Universal container builder
-│   ├── sast-semgrep.yaml          # Security modules
+│   ├── sast-semgrep.yaml       # Security modules
+│   ├── sast-sonarqube.yaml
 │   ├── iac-scan.yaml
 │   ├── trivy-scan.yaml
 │   ├── sbom-generate.yaml
@@ -56,22 +58,22 @@ devx-reusable-workflows/
 ### **High-Level Flow**
 
 ```
-┌─────────────────────────────────────────────────────────────────┐
-│                       PROJECT REPOSITORY                        │
-│                                                                 │
-│  ┌──────────────────────┐      ┌─────────────────────────┐      │
-│  │ .github/workflows/   │      │    devx-ci.yaml         │      │
-│  │   ci.yaml            │────▶ │  (Configuration)        │      │
-│  │                      │      │                         │      │
-│  │ Triggers on:         │      │  project:               │      │
-│  │  - push              │      │    language: node       │      │
-│  │  - pull_request      │      │  security:              │      │
-│  │                      │      │    sast: enabled        │      │
-│  │ Calls reusable       │      │  docker:                │      │
-│  │ workflow ──────────┐ │      │    enabled: true        │      │
-│  └────────────────────┼─┘      └─────────────────────────┘      │
-│                       │                                         │
-└───────────────────────┼─────────────────────────────────────────┘
+┌────────────────────────────────────────────────────────────────┐
+│                       PROJECT REPOSITORY                       │
+│                                                                │
+│  ┌──────────────────────┐      ┌─────────────────────────┐     │
+│  │ .github/workflows/   │      │    devx-ci.yaml         │     │
+│  │   ci.yaml            │────> │  (Configuration)        │     │
+│  │                      │      │                         │     │
+│  │ Triggers on:         │      │  project:               │     │
+│  │  - push              │      │    language: node       │     │
+│  │  - pull_request      │      │  security:              │     │
+│  │                      │      │    sast: enabled        │     │
+│  │ Calls reusable       │      │  docker:                │     │
+│  │ workflow ──────────┐ │      │    enabled: true        │     │
+│  └────────────────────┼─┘      └─────────────────────────┘     │
+│                       │                                        │
+└───────────────────────┼────────────────────────────────────────┘
                         │
                         │ workflow_call
                         │
@@ -83,59 +85,49 @@ devx-reusable-workflows/
 │  │              CI ORCHESTRATOR (The Brain)                 │   │
 │  │                                                          │   │
 │  │  1. Load & Parse devx-ci.yaml                            │   │
-│  │  2. Extract language & routing info                      │   │
+│  │  2. Extract language & SAST tool                         │   │
 │  │  3. Route to correct workflows based on config           │   │
 │  └──────────────────────────────────────────────────────────┘   │
 │                              │                                  │
-│                    ┌─────────┴─────────┐                        │
-│                    ▼                   ▼                        │
-│         ┌──────────────────┐  ┌──────────────────┐              │
-│         │ SECURITY GATES   │  │ SECURITY GATES   │              │
-│         │   (Parallel)     │  │   (Parallel)     │              │
-│         ├──────────────────┤  ├──────────────────┤              │
-│         │ sast-scan.yaml   │  │ iac-scan.yaml    │              │
-│         │ (Semgrep)        │  │ (Checkov)        │              │
-│         └────────┬─────────┘  └────────┬─────────┘              │
-│                  │                     │                        │
-│                  └──────────┬──────────┘                        │
-│                             ▼                                   │
-│                    ┌─────────────────┐                          │
-│                    │   Gates Pass?   │                          │
-│                    └────────┬────────┘                          │
-│                             │ yes                               │
-│                             ▼                                   │
-│              ┌──────────────────────────────┐                   │
-│              │   LANGUAGE BUILD (Routed)    │                   │
-│              ├──────────────────────────────┤                   │
-│              │  if language == 'node'       │                   │
-│              │    → node-build.yaml         │                   │
-│              │  if language == 'python'     │                   │
-│              │    → python-build.yaml       │                   │
-│              │  if language == 'maven'      │                   │
-│              │    → maven-build.yaml        │                   │
-│              └──────────────┬───────────────┘                   │
-│                             │                                   │
-│                             ▼                                   │
+│              ┌───────────────┼───────────────┐                  │
+│              ▼               ▼               ▼                  │
+│  ┌──────────────────┐ ┌──────────────────┐ ┌──────────────────┐ │
+│  │ SAST-Semgrep     │ │ SAST-SonarQube   │ │ IaC-Checkov      │ │
+│  │ (if tool=semgrep)│ │ (if tool=sonar)  │ │ (if iac.enabled) │ │
+│  └────────┬─────────┘ └────────┬─────────┘ └────────┬─────────┘ │
+│           │                    │                    │           │
+│           └────────────────────┴────────────────────┘           │
+│                                │                                │
+│                                ▼                                │
+│                 ┌──────────────────────────────┐                │
+│                 │   LANGUAGE BUILD (Routed)    │                │
+│                 ├──────────────────────────────┤                │
+│                 │  if language == 'node'       │                │
+│                 │    → node-build.yaml         │                │
+│                 │  if language == 'python'     │                │
+│                 │    → python-build.yaml       │                │
+│                 │  if language == 'maven'      │                │
+│                 │    → maven-build.yaml        │                │
+│                 └──────────────┬───────────────┘                │
+│                                │                                │
+│                                ▼                                │
 │              ┌──────────────────────────────┐                   │
 │              │   DOCKER BUILD (Conditional) │                   │
 │              ├──────────────────────────────┤                   │
 │              │  if docker.enabled == true   │                   │
 │              │    → docker-build.yaml       │                   │
-│              │       - ECR (OIDC)           │                   │
-│              │       - GHCR/DockerHub       │                   │
+│              │       - Downloads from Nexus │                   │
+│              │       - Builds & pushes      │                   │
 │              └──────────────┬───────────────┘                   │
 │                             │                                   │
 │                             ▼                                   │
 │              ┌──────────────────────────────┐                   │
 │              │   POST-BUILD SECURITY        │                   │
-│              │   (Sequential)               │                   │
+│              │   (Sequential Chain)         │                   │
 │              ├──────────────────────────────┤                   │
 │              │ 1. trivy-scan.yaml           │                   │
-│              │    (Container vuln scan)     │                   │
 │              │ 2. sbom-generate.yaml        │                   │
-│              │    (Create SBOM)             │                   │
 │              │ 3. sbom-scan.yaml            │                   │
-│              │    (SBOM vuln analysis)      │                   │
 │              └──────────────────────────────┘                   │
 │                                                                 │
 └─────────────────────────────────────────────────────────────────┘
@@ -148,12 +140,13 @@ devx-reusable-workflows/
 ### **Phase 1: Configuration Loading**
 
 ```yaml
-jobs:
-  load-config:
-    runs-on: ubuntu-latest
-    outputs:
-      config: ${{ steps.parse.outputs.config }}
-      language: ${{ steps.extract.outputs.language }}
+load-config:
+  runs-on: ubuntu-latest
+  outputs:
+    config: ${{ steps.parse.outputs.config }}
+    language: ${{ steps.extract.outputs.language }}
+    sast_tool: ${{ steps.extract.outputs.sast_tool }}
+    artifact_name: ${{ steps.extract.outputs.artifact_name }}
 ```
 
 **What Happens:**
@@ -161,8 +154,8 @@ jobs:
 2. Validates YAML syntax with `yq`
 3. Validates required fields (`project.language`)
 4. Validates language value (must be `node`, `python`, or `maven`)
-5. Parses entire config to JSON
-6. Extracts language for routing
+5. Detects SAST tool (semgrep or sonarqube)
+6. Determines artifact naming based on language
 7. Outputs config as JSON for downstream jobs
 
 **Critical Validations:**
@@ -191,32 +184,37 @@ fi
 
 ### **Phase 2: Security Gates (Parallel Execution)**
 
-```yaml
-sast:
-  needs: load-config
-  if: fromJson(needs.load-config.outputs.config).security.sast.enabled == true
+The orchestrator supports two SAST tools that are mutually exclusive:
 
-iac:
+```yaml
+sast-semgrep:
   needs: load-config
-  if: fromJson(needs.load-config.outputs.config).security.iac.enabled == true
+  if: |
+    fromJson(needs.load-config.outputs.config).security.sast.enabled == true &&
+    needs.load-config.outputs.sast_tool == 'semgrep'
+
+sast-sonarqube:
+  needs: load-config
+  if: |
+    fromJson(needs.load-config.outputs.config).security.sast.enabled == true &&
+    needs.load-config.outputs.sast_tool == 'sonarqube'
 ```
 
 **Execution Strategy:**
-- Both gates start **simultaneously** (parallel)
-- Independent of each other
-- Each can be enabled/disabled independently
+- SAST (Semgrep OR SonarQube) and IaC run **simultaneously** (parallel)
+- Only ONE SAST tool runs based on config
 - Results evaluated before proceeding to build
 
 **Decision Matrix:**
 
 | SAST Result | IaC Result | Build Proceeds? |
 |-------------|------------|-----------------|
-| success | success | ✅ Yes |
-| success | skipped | ✅ Yes |
-| skipped | success | ✅ Yes |
-| skipped | skipped | ✅ Yes |
-| failure | * | ❌ No |
-| * | failure | ❌ No |
+| success     | success    | ✅ Yes          |
+| success     | skipped    | ✅ Yes          |
+| skipped     | success    | ✅ Yes          |
+| skipped     | skipped    | ✅ Yes          |
+| failure     | *          | ❌ No           |
+| *           | failure    | ❌ No           |
 
 ---
 
@@ -224,11 +222,12 @@ iac:
 
 ```yaml
 build-node:
-  needs: [load-config, sast, iac]
+  needs: [load-config, sast-semgrep, sast-sonarqube, iac]
   if: |
     always() &&
     needs.load-config.result == 'success' &&
-    (needs.sast.result == 'success' || needs.sast.result == 'skipped') &&
+    (needs.sast-semgrep.result == 'success' || needs.sast-semgrep.result == 'skipped') &&
+    (needs.sast-sonarqube.result == 'success' || needs.sast-sonarqube.result == 'skipped') &&
     (needs.iac.result == 'success' || needs.iac.result == 'skipped') &&
     !contains(needs.*.result, 'failure') &&
     !contains(needs.*.result, 'cancelled') &&
@@ -239,62 +238,57 @@ build-node:
 
 ```
 IF language == 'node'
-  THEN execute node-build.yaml
+  THEN execute node-build.yaml → uploads to Nexus NPM
 ELSE IF language == 'python'
-  THEN execute python-build.yaml
+  THEN execute python-build.yaml → uploads to Nexus PyPI
 ELSE IF language == 'maven'
-  THEN execute maven-build.yaml
-ELSE
-  FAIL (invalid language)
+  THEN execute maven-build.yaml → uploads to Nexus Maven
 ```
 
 **Why This Pattern:**
 - Only ONE build job runs (not all three)
 - Uses GitHub Actions native conditional execution
 - No wasted runner minutes
-- Deterministic routing based on config
-
-**Important:** The condition `always()` ensures the job evaluates even if previous jobs were skipped, but the rest of the conditions prevent execution on failures.
+- Each build uploads directly to Nexus using native protocols
 
 ---
 
-### **Phase 4: Docker Build (Conditional)**
+### **Phase 4: Docker Build (With Artifact Download)**
 
 ```yaml
 docker:
   needs: [load-config, build-node, build-python, build-maven]
-  if: |
-    always() && 
-    fromJson(needs.load-config.outputs.config).docker.enabled == true &&
-    !contains(needs.*.result, 'failure') && 
-    !contains(needs.*.result, 'cancelled')
+  with:
+    # Nexus Artifact Download (Optimization)
+    nexus_artifact_base_url: ${{ config.nexus.url }}
+    nexus_artifact_repo: ${{ config.nexus.repository }}
+    nexus_artifact_path: ${{ needs.build-maven.outputs.nexus_path || needs.build-node.outputs.nexus_path || needs.build-python.outputs.nexus_path }}
 ```
 
-**Execution Logic:**
-1. Waits for ALL build jobs to complete (only one actually runs)
-2. Checks if Docker is enabled in config
-3. Checks that no failures occurred upstream
-4. Routes to appropriate registry:
-   - `registry_type: ecr` → AWS ECR with OIDC
-   - `registry_type: generic` → GHCR/Docker Hub with credentials
+**Optimized Flow:**
+1. Receives `nexus_path` from build job
+2. Downloads artifact directly from Nexus using curl
+3. Passes artifact filename via `ARTIFACT_NAME` build arg
+4. Dockerfile uses `ARG ARTIFACT_NAME` to receive the file
+5. No GitHub Artifacts transfer needed!
 
 **Registry Decision Tree:**
 
 ```
-IF registry_type == 'ecr'
+IF registry_type == 'nexus'
   THEN
-    1. Validate role_to_assume exists
-    2. Configure AWS credentials via OIDC
-    3. Login to ECR
-    4. Build and push
+    1. Login to Nexus Docker registry
+    2. Build with artifact from Nexus
+    3. Push to Nexus
+ELSE IF registry_type == 'ecr'
+  THEN
+    1. Configure AWS OIDC credentials
+    2. Login to ECR
+    3. Build and push
 ELSE IF registry_type == 'generic'
   THEN
-    1. Validate registry_url exists
-    2. Validate credentials exist
-    3. Login to generic registry
-    4. Build and push
-ELSE
-  FAIL (invalid registry_type)
+    1. Login to GHCR/DockerHub
+    2. Build and push
 ```
 
 ---
@@ -305,217 +299,137 @@ ELSE
 trivy:
   needs: [load-config, docker]
   if: |
-    always() &&
-    fromJson(needs.load-config.outputs.config).security.trivy.enabled == true &&
-    needs.docker.result == 'success'
+    needs.docker.result == 'success' &&
+    config.security.trivy.enabled == true
 
 sbom:
-  needs: [load-config, docker]
+  needs: [load-config, docker, trivy]
   if: |
-    always() &&
-    fromJson(needs.load-config.outputs.config).security.sbom.enabled == true &&
-    needs.docker.result == 'success'
+    needs.docker.result == 'success' &&
+    (needs.trivy.result == 'success' || needs.trivy.result == 'skipped')
 
 sbom-scan:
   needs: [load-config, sbom]
   if: |
-    always() &&
-    fromJson(needs.load-config.outputs.config).security.sbom_scan.enabled == true &&
     needs.sbom.result == 'success'
 ```
 
 **Execution Order:**
 ```
-1. Trivy Scan (parallel with SBOM generation)
-   └─ Scans Docker image directly
+1. Trivy Scan
+   └─ Scans Docker image for vulnerabilities
+   └─ CAN FAIL the pipeline (if fail_on_vuln=true)
 
-2. SBOM Generation (parallel with Trivy)
+2. SBOM Generation (waits for Trivy)
    └─ Creates software bill of materials
+   └─ Never fails
 
 3. SBOM Scan (waits for SBOM)
-   └─ Scans SBOM for vulnerabilities
+   └─ Scans SBOM for CVEs
+   └─ Never fails (report only)
 ```
-
-**Why This Order:**
-- Trivy and SBOM can run in parallel (independent)
-- SBOM Scan MUST wait for SBOM to be generated
-- All are optional (can be disabled independently)
-
----
-
-## 🧠 Decision Logic
-
-### **Security Gate Bypass Prevention**
-
-**Problem:** If security gates are disabled, jobs might proceed without validation.
-
-**Solution:** Explicit result checking:
-
-```yaml
-if: |
-  always() &&
-  needs.load-config.result == 'success' &&
-  (needs.sast.result == 'success' || needs.sast.result == 'skipped') &&
-  (needs.iac.result == 'success' || needs.iac.result == 'skipped') &&
-  !contains(needs.*.result, 'failure') &&
-  !contains(needs.*.result, 'cancelled')
-```
-
-**What This Does:**
-1. `always()` - Evaluate condition even if deps skipped
-2. Check load-config succeeded (config is valid)
-3. Check SAST either passed OR was skipped (not failed)
-4. Check IaC either passed OR was skipped (not failed)
-5. Ensure no failures anywhere
-6. Ensure nothing was cancelled
-
----
-
-### **Language Routing Decision**
-
-**Implementation:**
-```yaml
-needs.load-config.outputs.language == 'node'  # Only for Node
-needs.load-config.outputs.language == 'python'  # Only for Python
-needs.load-config.outputs.language == 'maven'  # Only for Maven
-```
-
-**Why Not Use Matrix Strategy:**
-- Matrix would run ALL builds (waste)
-- We only want ONE build to run
-- Config-driven routing is more explicit
-- Easier to debug and understand
-
----
-
-### **Docker Conditional Logic**
-
-**Config Check:**
-```yaml
-fromJson(needs.load-config.outputs.config).docker.enabled == true
-```
-
-**Why JSON Parsing:**
-- Config is passed as JSON string
-- `fromJson()` parses it to object
-- Can then access nested properties
-- Type-safe boolean comparison
 
 ---
 
 ## 🧩 Module Design
 
-### **Build Modules (node-build.yaml, python-build.yaml, maven-build.yaml)**
+### **Build Modules**
 
-**Common Pattern:**
+All build modules follow the same pattern:
+
+1. **Setup** - Install language runtime with native caching
+2. **Install** - Install dependencies
+3. **Test** - Run unit tests (if enabled)
+4. **Build** - Create artifact (JAR, wheel, tarball)
+5. **Upload** - Publish to Nexus using native protocol
+
+**Key Outputs:**
+- `nexus_path` - Path to artifact in Nexus (for Docker to download)
+- `artifact_file` - Filename of the artifact
+
+### **node-build.yaml**
+
 ```yaml
-on:
-  workflow_call:
-    inputs:
-      working_directory:
-        type: string
-        default: "."
-      run_tests:
-        type: boolean
-        default: true
-      artifact_path:
-        type: string
-        default: ""
-    outputs:
-      artifact_name:
-        value: ${{ jobs.build.outputs.artifact_name }}
+# Supports two repository types:
+nexus_repo_type: "npm"   # Uses npm publish
+nexus_repo_type: "raw"   # Uses curl PUT
 ```
 
-**Execution Flow:**
-1. Setup language runtime (with native caching)
-2. Install dependencies
-3. Run unit tests (if enabled)
-4. Capture test results as artifact
-5. Build application
-6. Upload build artifact (if path specified)
+### **python-build.yaml**
 
-**Why Separate Test Step:**
-- Tests run BEFORE build (fail-fast)
-- Test results captured even on failure
-- Build can skip tests (already ran)
+```yaml
+# Supports two repository types:
+nexus_repo_type: "pypi"  # Uses twine upload
+nexus_repo_type: "raw"   # Uses curl PUT
+```
+
+### **maven-build.yaml**
+
+```yaml
+# Always uses Maven repository layout:
+# [groupId]/[artifactId]/[version]/[artifactId]-[version].jar
+```
 
 ---
 
-### **Docker Build Module (docker-build.yaml)**
+### **Docker Build Module**
 
-**Dual Strategy Pattern:**
+The `docker-build.yaml` supports three registry types:
+
+1. **ECR** - AWS OIDC authentication (no static keys)
+2. **Generic** - Username/password (GHCR, Docker Hub)
+3. **Nexus** - Nexus Docker registry
+
+**Key Feature: Direct Artifact Download**
 
 ```yaml
-# Strategy A: AWS ECR with OIDC
-- name: Configure AWS Credentials
-  if: inputs.registry_type == 'ecr'
-  uses: aws-actions/configure-aws-credentials@v4
-  with:
-    role-to-assume: ${{ inputs.role_to_assume }}
-
-# Strategy B: Generic with Username/Password
-- name: Login to Generic Registry
-  if: inputs.registry_type == 'generic'
-  uses: docker/login-action@v3
-  with:
-    registry: ${{ inputs.registry_url }}
-    username: ${{ secrets.registry_username }}
-    password: ${{ secrets.registry_password }}
+- name: Download Artifact from Nexus
+  if: inputs.nexus_artifact_path != ''
+  run: |
+    ARTIFACT_NAME=$(basename "$ARTIFACT_PATH")
+    curl -f -u "$NEXUS_USER:$NEXUS_PASS" \
+      -o "./$ARTIFACT_NAME" \
+      "$BASE_URL/repository/$REPO/$ARTIFACT_PATH"
 ```
 
-**Image URI Construction:**
-
-```bash
-# Determine registry
-if [[ "${{ inputs.registry_type }}" == "ecr" ]]; then
-  REGISTRY="${{ steps.login-ecr.outputs.registry }}"
-else
-  REGISTRY="${{ inputs.registry_url }}"
-fi
-
-# Construct full URI
-FULL_URI="$REGISTRY/${{ inputs.image_name }}:$TAG"
-```
-
-**Multi-Stage Caching:**
-```yaml
-cache-from: type=gha          # Read from GitHub Actions cache
-cache-to: type=gha,mode=max   # Write all layers to cache
-```
+This bypasses GitHub Artifacts entirely, making Docker builds faster and more reliable.
 
 ---
 
 ### **Security Modules**
 
-#### **SAST (sast-scan.yaml)**
-- **Tool:** Semgrep
-- **Mode:** Local-only (no cloud)
+#### **sast-semgrep.yaml**
+- **Tool:** Semgrep (free, fast)
+- **Mode:** Local-only (no cloud dependency)
 - **Output:** SARIF → GitHub Security tab
-- **Configurable:** Severity threshold, exclusions
+- **Configurable:** Severity threshold, exclusions, rulesets
 
-#### **IaC (iac-scan.yaml)**
+#### **sast-sonarqube.yaml**
+- **Tool:** SonarQube (enterprise, comprehensive)
+- **Features:** PR decoration, quality gates, technical debt
+- **Output:** SonarQube dashboard + PR comments
+
+#### **iac-scan.yaml**
 - **Tool:** Checkov
-- **Targets:** Terraform, K8s, CloudFormation, etc.
+- **Targets:** Terraform, K8s, CloudFormation, ARM, Serverless
 - **Mode:** Graph-based analysis
-- **Configurable:** Soft-fail, skip checks, frameworks
+- **Output:** SARIF → GitHub Security tab
 
-#### **Container Scan (trivy-scan.yaml)**
+#### **trivy-scan.yaml**
 - **Tool:** Trivy
 - **Modes:** Filesystem OR Image
-- **Scans:** Vulnerabilities, secrets, misconfigs
-- **Configurable:** Severity, ignore unfixed
+- **Scans:** Vulnerabilities, secrets, misconfigurations
+- **Registry Auth:** ECR (OIDC), Generic, Nexus
 
-#### **SBOM (sbom-generate.yaml)**
+#### **sbom-generate.yaml**
 - **Tool:** Syft
-- **Modes:** Filesystem OR Image
 - **Formats:** CycloneDX, SPDX
-- **Purpose:** Inventory only (non-blocking)
+- **Purpose:** Create inventory (non-blocking)
 
-#### **SBOM Scan (sbom-scan.yaml)**
+#### **sbom-scan.yaml**
 - **Tool:** Grype
 - **Input:** SBOM from previous job
-- **Purpose:** CVE analysis
-- **Mode:** Always non-blocking (report only)
+- **Mode:** Always report-only (never fails)
 
 ---
 
@@ -528,43 +442,29 @@ devx-ci.yaml (YAML)
         ↓
     yq parse
         ↓
-    JSON string
-        ↓
-  GitHub Output
+    JSON string (stored in output)
         ↓
 fromJson() in downstream jobs
         ↓
-  Access properties
+Access nested properties
 ```
 
-### **Artifact Flow**
+### **Artifact Flow (Optimized)**
 
 ```
 Build Job
     ↓
-upload-artifact
+Upload to Nexus (native protocol)
     ↓
-GitHub Artifacts Storage
+Output: nexus_path
     ↓
-download-artifact (if needed)
+Docker Build Job
     ↓
-Next Job
-```
-
-### **Image Flow**
-
-```
-docker-build.yaml
+Download from Nexus (curl)
     ↓
-Build & Push
+Build image with artifact
     ↓
-Container Registry (ECR/GHCR/DockerHub)
-    ↓
-Output: image_uri + image_digest
-    ↓
-trivy-scan.yaml (scans from registry)
-    ↓
-sbom-generate.yaml (analyzes from registry)
+Push to registry
 ```
 
 ### **SARIF Flow**
@@ -574,7 +474,7 @@ Security Scan Job
     ↓
 Generate SARIF file
     ↓
-upload-sarif action
+github/codeql-action/upload-sarif
     ↓
 GitHub Security Tab
     ↓
@@ -589,103 +489,74 @@ Code Scanning Alerts UI
 
 ```
 Layer 1: Pre-Build
-    ├─ SAST (source code analysis)
-    └─ IaC (infrastructure configuration)
+    ├─ SAST (Semgrep/SonarQube)
+    └─ IaC (Checkov)
 
 Layer 2: Build
     ├─ Dependency resolution
     ├─ Unit tests
-    └─ Build validation
+    └─ Artifact validation
 
 Layer 3: Container
-    ├─ Trivy (image vulnerabilities)
-    ├─ SBOM (dependency inventory)
-    └─ SBOM Scan (CVE analysis)
-
-Layer 4: Deployment Gate
-    └─ Policy enforcement (fail_on_vuln)
+    ├─ Trivy scan
+    ├─ SBOM generation
+    └─ SBOM CVE scan
 ```
 
 ### **Credential Management**
 
 **AWS ECR (No Stored Credentials):**
 ```yaml
-# Uses OIDC federation
-# No AWS keys in GitHub
+# Uses OIDC federation - no AWS keys in GitHub
 role-to-assume: arn:aws:iam::123:role/GHA
-
-# GitHub becomes trusted identity provider
-# Temporary credentials issued per run
 ```
 
-**Generic Registries (Encrypted Secrets):**
+**Nexus (Encrypted Secrets):**
 ```yaml
 # Stored in GitHub Secrets (encrypted at rest)
+# Never logged, automatically masked
 secrets:
-  registry_username: ${{ secrets.REGISTRY_USERNAME }}
-  registry_password: ${{ secrets.REGISTRY_PASSWORD }}
-
-# Never logged, never exposed
-# Automatically masked in logs
+  NEXUS_USERNAME: ${{ secrets.NEXUS_USERNAME }}
+  NEXUS_PASSWORD: ${{ secrets.NEXUS_PASSWORD }}
 ```
 
 ### **Permissions Model**
 
-**Minimum Required Permissions:**
 ```yaml
 permissions:
   contents: read          # Read code
   security-events: write  # Upload SARIF
   actions: write          # Upload artifacts
   id-token: write         # OIDC token (ECR)
-  packages: write         # GHCR push (if used)
+  packages: write         # GHCR push
+  pull-requests: write    # SonarQube PR decoration
 ```
-
-**Why These:**
-- `contents: read` - Checkout code
-- `security-events: write` - Security tab integration
-- `actions: write` - Artifact upload
-- `id-token: write` - AWS OIDC authentication
-- `packages: write` - GHCR publishing
 
 ---
 
 ## 💾 Caching Strategy
 
-### **Native Language Caching**
+### **Language Caching**
 
-**Node.js:**
 ```yaml
+# Node.js
 - uses: actions/setup-node@v4
   with:
     cache: npm
     cache-dependency-path: package-lock.json
-```
-- Caches `~/.npm` and `node_modules`
-- Key: Hash of `package-lock.json`
-- Automatic restoration
 
-**Python:**
-```yaml
+# Python
 - uses: actions/setup-python@v5
   with:
     cache: pip
     cache-dependency-path: requirements.txt
-```
-- Caches `~/.cache/pip`
-- Key: Hash of `requirements.txt`
-- Automatic restoration
 
-**Maven:**
-```yaml
+# Maven
 - uses: actions/setup-java@v4
   with:
     cache: maven
     cache-dependency-path: pom.xml
 ```
-- Caches `~/.m2/repository`
-- Key: Hash of `pom.xml`
-- Automatic restoration
 
 ### **Docker Layer Caching**
 
@@ -696,317 +567,81 @@ permissions:
     cache-to: type=gha,mode=max
 ```
 
-**How It Works:**
-1. First build: All layers built, cached to GHA
-2. Second build: Unchanged layers restored from cache
-3. Only changed layers rebuilt
-4. Significant speed improvement (5-10x faster)
-
-**Cache Scope:**
-- Per repository
-- Per branch (with fallback to default branch)
-- Shared across workflow runs
-
----
-
-## ⚠️ Error Handling
-
-### **Validation Errors (Fail Fast)**
-
-```yaml
-- name: Validate Inputs
-  run: |
-    if [[ "${{ inputs.registry_type }}" == "ecr" ]]; then
-      if [[ -z "${{ inputs.role_to_assume }}" ]]; then
-        echo "::error::role_to_assume is required for ECR"
-        exit 1
-      fi
-    fi
-```
-
-**Strategy:**
-- Validate ALL inputs before execution
-- Fail with clear error messages
-- Provide remediation guidance
-
-### **Timeout Protection**
-
-```yaml
-jobs:
-  build:
-    runs-on: ubuntu-latest
-    timeout-minutes: 30  # Job level
-
-    steps:
-      - name: Run Tests
-        timeout-minutes: 15  # Step level
-```
-
-**Why Both:**
-- Step timeout: Catch individual hung steps
-- Job timeout: Catch overall workflow issues
-- Prevents infinite runner consumption
-
-### **Conditional Failure Handling**
-
-```yaml
-continue-on-error: ${{ inputs.fail_on_findings == false }}
-```
-
-**Use Cases:**
-- Security scans (audit mode vs enforcement)
-- Optional checks
-- Backward compatibility
-
-### **Always Blocks for Cleanup**
-
-```yaml
-- name: Upload Test Results
-  if: always() && inputs.run_tests == true
-```
-
-**Guarantees:**
-- Test results captured even on failure
-- Artifacts uploaded for debugging
-- Proper cleanup on error
-
 ---
 
 ## ⚡ Performance Optimization
 
 ### **Parallel Execution**
 
-```yaml
-# Security gates run simultaneously
-sast:
-  needs: [load-config]
-
-iac:
-  needs: [load-config]  # No dependency on sast
-```
-
-**Time Savings:**
+Security gates run simultaneously:
 ```
 Sequential: SAST (5min) + IaC (3min) = 8min
 Parallel:   max(SAST, IaC) = 5min
-Savings:    3min (37.5%)
+Savings:    37.5%
 ```
 
 ### **Conditional Execution**
 
+Jobs skip entirely if disabled in config:
 ```yaml
 if: fromJson(needs.load-config.outputs.config).docker.enabled == true
 ```
 
-**Benefits:**
-- Skip unnecessary jobs
-- Reduce runner time
-- Faster feedback
+### **Direct Nexus Downloads**
 
-### **Smart Caching**
+Docker builds download from Nexus instead of GitHub Artifacts:
+- Faster (Nexus is typically on same network)
+- More reliable (dedicated artifact storage)
+- Lower GitHub Actions billing
 
-**Impact:**
-```
-First Run:  Dependencies (5min) + Build (3min) = 8min
-Cached Run: Cache Hit (10sec) + Build (3min) = 3min 10sec
-Savings:    60% reduction
-```
-
-### **Job Concurrency Control**
+### **Concurrency Control**
 
 ```yaml
 concurrency:
-  group: ${{ github.workflow }}-${{ github.ref }}
-  cancel-in-progress: true
+  group: ci-${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: ${{ github.ref != 'refs/heads/main' }}
 ```
 
-**Benefits:**
-- Cancel old runs on new push
-- Save runner minutes
-- Faster feedback on latest code
+Prevents multiple runs on same branch, but protects main branch.
 
 ---
 
-## 📈 Scalability Considerations
+## ⚠️ Error Handling
 
-### **Multi-Repository Design**
+### **Fail-Fast Validation**
 
-**Centralized:**
-- Single source of truth
-- Version-controlled workflows
-- Consistent across all projects
-
-**Project-Specific:**
-- Minimal configuration (2 files)
-- Full customization possible
-- No workflow duplication
-
-### **Resource Management**
-
-**Runner Usage:**
-- Average pipeline: 15-25 minutes
-- Typical cost: $0.008/minute (GitHub hosted)
-- Per run cost: $0.12 - $0.20
-
-**Optimization:**
-- Caching reduces costs 40-60%
-- Parallel execution reduces time 30-40%
-- Conditional jobs reduce unnecessary work
-
----
-
-## 🔄 Workflow Lifecycle
-
-### **Development → Production**
-
-```
-1. Change Workflow
-   ↓
-2. Test with workflow_dispatch
-   ↓
-3. Version with git tag (v1.x.x)
-   ↓
-4. Projects reference @v1
-   ↓
-5. Update moves to @v1.1.0
-   ↓
-6. Projects automatically get fixes (minor versions)
-   ↓
-7. Breaking changes require @v2
-```
-
-### **Version Strategy**
-
-**Recommended:**
+All inputs validated before execution:
 ```yaml
-# Projects should use:
-uses: org/workflows/.github/workflows/ci-orchestrator.yaml@v1
-
-# Not:
-uses: org/workflows/.github/workflows/ci-orchestrator.yaml@main
+if [[ -z "$ROLE_ARN" ]]; then
+  echo "::error::role_to_assume is required for ECR"
+  exit 1
+fi
 ```
 
-**Why:**
-- `@v1` tracks latest `v1.x.x` (gets fixes)
-- `@main` gets breaking changes
-- Controlled rollout of major versions
+### **Timeout Protection**
 
----
-
-## 🎯 Design Decisions
-
-### **Why Config File Instead of Workflow Inputs?**
-
-**Config File Approach:**
 ```yaml
-# devx-ci.yaml
-project:
-  language: node
-security:
-  sast:
-    enabled: true
+jobs:
+  build:
+    timeout-minutes: 30  # Job level
+
+  steps:
+    - name: Run Tests
+      timeout-minutes: 15  # Step level
 ```
 
-**Alternative (Not Used):**
+### **Always Blocks**
+
 ```yaml
-# .github/workflows/ci.yaml
-with:
-  language: node
-  sast_enabled: true
-  sast_severity: ERROR
-  # ... 30+ more inputs
+- name: Upload Test Results
+  if: always() && inputs.run_tests == true
 ```
 
-**Reasons for Config File:**
-1. Single source of truth
-2. Easier to read and maintain
-3. Version controlled with code
-4. Can be validated independently
-5. Better for complex configurations
+Ensures artifacts are captured even on failure.
 
-### **Why Orchestrator Instead of Composite Actions?**
+### **Report-Only Mode**
 
-**Orchestrator Pattern:**
-- Clearer job dependency visualization
-- Better parallel execution control
-- Easier to debug (each job separate)
-- GitHub Actions UI shows flow
-
-**Composite Actions:**
-- All steps in single job
-- Harder to parallelize
-- Less visibility in UI
-- More complex error handling
-
-### **Why No Workflow Templates?**
-
-**Our Approach:**
-- Reusable workflows called from projects
-- Projects have minimal `.github/workflows/ci.yaml`
-
-**Workflow Templates:**
-- GitHub feature for repository creation
-- Creates copy of workflow in new repo
-- No centralized updates
-- Leads to drift
-
-**Our approach ensures:**
-- Central updates propagate automatically
-- Consistent behavior across all projects
-- Single source of truth
-
----
-
-## 📊 Metrics & Observability
-
-### **Built-in Observability**
-
-**GitHub Actions Provides:**
-- Job duration tracking
-- Success/failure rates
-- Step-level timing
-- Log aggregation
-
-**Our Additions:**
-- Pipeline summary job (overall status)
-- Artifact uploads (test results, coverage)
-- SARIF uploads (security findings)
-
-### **Recommended Monitoring**
-
-**Metrics to Track:**
-- Average pipeline duration per language
-- Success rate per workflow
-- Most common failure points
-- Security findings trends
-- Runner minute consumption
-
-**Alerts to Set:**
-- Pipeline duration > 30min
-- Success rate < 90%
-- Security findings increase
-- Cost anomalies
-
----
-
-## 📝 Summary
-
-### **Key Architectural Patterns**
-
-1. **Config-Driven:** Single YAML controls everything
-2. **Modular:** Composable workflow building blocks
-3. **Fail-Fast:** Early validation and security gates
-4. **Parallel:** Maximize concurrency where possible
-5. **Conditional:** Skip unnecessary work
-6. **Cached:** Optimize for speed and cost
-7. **Secure:** Multiple security layers
-8. **Observable:** Clear feedback and artifacts
-
-### **Design Philosophy**
-
-- **Simplicity:** Easy to understand and use
-- **Consistency:** Same patterns across all workflows
-- **Flexibility:** Highly configurable
-- **Reliability:** Deterministic and reproducible
-- **Security:** Defense in depth
-- **Performance:** Optimized for speed and cost
+For SBOM scan:
+```yaml
+continue-on-error: true  # Never fails the pipeline
+```

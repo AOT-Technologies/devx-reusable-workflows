@@ -1,6 +1,6 @@
 # Getting Started with DevX Reusable Workflows
 
-This guide will walk you through setting up the DevX CI/CD pipeline for your project.
+This guide provides a complete walkthrough for setting up the DevX CI/CD pipeline for your project.
 
 ---
 
@@ -8,10 +8,13 @@ This guide will walk you through setting up the DevX CI/CD pipeline for your pro
 
 Before you begin, ensure you have:
 
-- ✅ A GitHub repository
-- ✅ Code in one of these languages: Node.js, Python, or Java (Maven)
-- ✅ (Optional) A Dockerfile if you want container builds
-- ✅ (Optional) AWS IAM role configured if using ECR
+- ✅ A GitHub repository with your application code
+- ✅ Code in one of these languages: **Node.js**, **Python**, or **Java (Maven)**
+- ✅ (Optional) A **Dockerfile** if you want container builds
+- ✅ (Optional) **Nexus Credentials** stored as GitHub Secrets:
+  - `NEXUS_USERNAME`
+  - `NEXUS_PASSWORD`
+- ✅ (Optional) **AWS IAM role** configured if using ECR
 
 ---
 
@@ -41,6 +44,14 @@ project:
 
 build:
   run_tests: true
+  run_build: true
+  build_script: "build"       # Runs `npm run build`
+  artifact_path: "dist/"      # Optional: upload build output
+
+nexus:
+  url: "https://nexus.example.com"
+  repository: "npm-hosted"
+  repo_type: "npm"
 
 security:
   sast:
@@ -49,7 +60,9 @@ security:
     enabled: true
 
 docker:
-  enabled: false  # Set to true if you need Docker
+  enabled: true               # Set to false if no container needed
+  image_name: my-node-app
+  registry_type: nexus
 ```
 
 </details>
@@ -65,6 +78,13 @@ project:
 
 build:
   run_tests: true
+  build_command: "pip install wheel && python setup.py bdist_wheel"
+  artifact_path: "dist/*.whl"
+
+nexus:
+  url: "https://nexus.example.com"
+  repository: "pypi-hosted"
+  repo_type: "pypi"
 
 security:
   sast:
@@ -73,7 +93,9 @@ security:
     enabled: true
 
 docker:
-  enabled: false  # Set to true if you need Docker
+  enabled: true
+  image_name: my-python-app
+  registry_type: nexus
 ```
 
 </details>
@@ -89,6 +111,12 @@ project:
 
 build:
   run_tests: true
+  maven_args: "-B clean package -DskipTests"
+  artifact_path: "target/*.jar"
+
+nexus:
+  url: "https://nexus.example.com"
+  repository: "maven-releases"
 
 security:
   sast:
@@ -97,7 +125,9 @@ security:
     enabled: true
 
 docker:
-  enabled: false  # Set to true if you need Docker
+  enabled: true
+  image_name: my-java-app
+  registry_type: nexus
 ```
 
 </details>
@@ -128,7 +158,16 @@ jobs:
     secrets: inherit
 ```
 
-### **Step 4: Commit and Push**
+### **Step 4: Add GitHub Secrets**
+
+Go to your repository **Settings → Secrets and variables → Actions** and add:
+
+| Secret | Description |
+|--------|-------------|
+| `NEXUS_USERNAME` | Nexus service account username |
+| `NEXUS_PASSWORD` | Nexus service account password |
+
+### **Step 5: Commit and Push**
 
 ```bash
 git add devx-ci.yaml .github/workflows/ci.yaml
@@ -136,7 +175,7 @@ git commit -m "Add DevX CI pipeline"
 git push
 ```
 
-### **Step 5: Watch It Run! 🎉**
+### **Step 6: Watch It Run! 🎉**
 
 1. Go to your repository on GitHub
 2. Click **Actions** tab
@@ -149,62 +188,66 @@ git push
 
 If you want to build and push Docker images:
 
-### **1. Add Dockerfile**
+### **1. Create Dockerfile**
 
-Create a `Dockerfile` in your project root (if you don't have one):
+Your Dockerfile should accept the artifact as a build argument:
 
-<details>
-<summary><b>Node.js Dockerfile Example</b></summary>
+**For Python:**
+```dockerfile
+FROM python:3.11-alpine
+WORKDIR /app
 
+# The artifact is downloaded by the CI pipeline
+ARG ARTIFACT_NAME
+COPY ${ARTIFACT_NAME} ./
+RUN pip install --no-cache-dir ${ARTIFACT_NAME}
+
+EXPOSE 8000
+CMD ["gunicorn", "--bind", "0.0.0.0:8000", "app:app"]
+```
+
+**For Node.js:**
 ```dockerfile
 FROM node:20-alpine
 WORKDIR /app
-COPY package*.json ./
-RUN npm ci --only=production
-COPY . .
+
+ARG ARTIFACT_NAME
+COPY ${ARTIFACT_NAME} ./
+RUN tar -xzf ${ARTIFACT_NAME} --strip-components=1
+
 EXPOSE 3000
-CMD ["node", "index.js"]
+CMD ["node", "dist/index.js"]
 ```
 
-</details>
-
-<details>
-<summary><b>Python Dockerfile Example</b></summary>
-
-```dockerfile
-FROM python:3.11-slim
-WORKDIR /app
-COPY requirements.txt .
-RUN pip install --no-cache-dir -r requirements.txt
-COPY . .
-EXPOSE 8000
-CMD ["python", "app.py"]
-```
-
-</details>
-
-<details>
-<summary><b>Java Dockerfile Example</b></summary>
-
+**For Java:**
 ```dockerfile
 FROM eclipse-temurin:17-jre-alpine
 WORKDIR /app
-COPY target/*.jar app.jar
+
+ARG ARTIFACT_NAME
+COPY ${ARTIFACT_NAME} app.jar
+
 EXPOSE 8080
 ENTRYPOINT ["java", "-jar", "app.jar"]
 ```
 
-</details>
-
 ### **2. Choose Your Registry**
 
-#### **Option A: AWS ECR (Recommended)**
+#### **Option A: Nexus Docker Registry (Recommended)**
 
-**Prerequisites:**
-- AWS account
-- IAM role for GitHub Actions with ECR permissions
+```yaml
+docker:
+  enabled: true
+  image_name: my-app
+  registry_type: nexus
 
-**Update devx-ci.yaml:**
+nexus:
+  docker_registry_url: "nexus.example.com:8082"
+  docker_repository: "docker-hosted"
+```
+
+#### **Option B: AWS ECR**
+
 ```yaml
 docker:
   enabled: true
@@ -216,12 +259,10 @@ aws:
   role_to_assume: arn:aws:iam::123456789012:role/GitHubActionsRole
 ```
 
-**Setup IAM Role:**
-See [AWS IAM Setup Guide](#aws-iam-setup-for-ecr) below.
+See [AWS IAM Setup](#aws-iam-setup-for-ecr) below.
 
-#### **Option B: GitHub Container Registry (GHCR)**
+#### **Option C: GitHub Container Registry (GHCR)**
 
-**Update devx-ci.yaml:**
 ```yaml
 docker:
   enabled: true
@@ -230,56 +271,63 @@ docker:
   registry_url: ghcr.io
 ```
 
-**Add Repository Secret:**
-1. Go to repository **Settings → Secrets and variables → Actions**
-2. Add secrets:
-   - `REGISTRY_USERNAME`: Your GitHub username
-   - `REGISTRY_PASSWORD`: GitHub Personal Access Token with `write:packages` scope
-
-#### **Option C: Docker Hub**
-
-**Update devx-ci.yaml:**
-```yaml
-docker:
-  enabled: true
-  image_name: your-dockerhub-username/my-app
-  registry_type: generic
-  registry_url: docker.io
-```
-
-**Add Repository Secrets:**
-1. Go to repository **Settings → Secrets → Actions**
-2. Add secrets:
-   - `REGISTRY_USERNAME`: Docker Hub username
-   - `REGISTRY_PASSWORD`: Docker Hub access token
-
-### **3. Commit and Push**
-
-```bash
-git add Dockerfile devx-ci.yaml
-git commit -m "Add Docker support"
-git push
-```
-
-Your pipeline will now build and push Docker images! 🐳
+Add secrets:
+- `REGISTRY_USERNAME`: Your GitHub username
+- `REGISTRY_PASSWORD`: GitHub PAT with `write:packages` scope
 
 ---
 
-## 🏗️ Project Structure
+## 🔐 Security Configuration
 
-After setup, your repository should look like this:
+### **SAST (Code Scanning)**
 
+Choose between Semgrep (free, fast) or SonarQube (enterprise):
+
+**Semgrep (Default):**
+```yaml
+security:
+  sast:
+    enabled: true
+    tool: semgrep
+    severity: ERROR
+    fail_on_findings: true
+    exclude_paths: "tests/,node_modules/"
 ```
-your-project/
-├── .github/
-│   └── workflows/
-│       └── ci.yaml              # ✅ Workflow that calls DevX
-├── devx-ci.yaml                 # ✅ Your configuration
-├── Dockerfile                   # ✅ If using Docker
-├── package.json                 # For Node.js
-├── requirements.txt             # For Python
-├── pom.xml                      # For Maven
-└── src/                         # Your source code
+
+**SonarQube:**
+```yaml
+security:
+  sast:
+    enabled: true
+    tool: sonarqube
+    sonar_host_url: "https://sonarqube.example.com"
+    sonar_project_key: "my-project"
+    fail_on_quality_gate: true
+```
+
+Required secret: `SONAR_TOKEN`
+
+### **IaC Scanning (Terraform/K8s)**
+
+```yaml
+security:
+  iac:
+    enabled: true
+    working_directory: "./terraform"
+    frameworks: terraform,kubernetes
+    soft_fail: false           # Set to true for audit mode
+```
+
+### **Container Scanning**
+
+```yaml
+security:
+  trivy:
+    enabled: true
+    severity: CRITICAL,HIGH
+    fail_on_vuln: true
+    ignore_unfixed: true       # Skip vulns with no fix
+    scanners: vuln,secret,misconfig
 ```
 
 ---
@@ -289,27 +337,29 @@ your-project/
 When you push code, this happens:
 
 ```
-1. Load Configuration
+1. LOAD CONFIGURATION
    └─ Reads devx-ci.yaml
    └─ Validates settings
-   └─ Routes to correct language
+   └─ Extracts language for routing
 
-2. Security Gates (Parallel)
-   ├─ SAST Scan (Semgrep)
+2. SECURITY GATES (Parallel)
+   ├─ SAST Scan (Semgrep/SonarQube)
    │  └─ Scans your code for vulnerabilities
    └─ IaC Scan (Checkov) [if enabled]
       └─ Scans Terraform/K8s files
 
-3. Build & Test
+3. BUILD & TEST
    ├─ Install dependencies
    ├─ Run unit tests
-   └─ Build application
+   ├─ Build application
+   └─ Upload to Nexus (NPM/PyPI/Maven)
 
-4. Docker Build [if enabled]
+4. DOCKER BUILD [if enabled]
+   ├─ Download artifact from Nexus
    ├─ Build container image
-   └─ Push to registry (ECR/GHCR/Docker Hub)
+   └─ Push to registry (Nexus/ECR/GHCR)
 
-5. Container Security
+5. POST-BUILD SECURITY (Sequential)
    ├─ Trivy Scan
    │  └─ Scan image for vulnerabilities
    ├─ SBOM Generation
@@ -317,7 +367,7 @@ When you push code, this happens:
    └─ SBOM Scan
       └─ Check SBOM for known CVEs
 
-6. Pipeline Summary
+6. PIPELINE SUMMARY
    └─ Report overall status
 ```
 
@@ -338,178 +388,11 @@ All security scan results automatically appear in the **Security** tab:
    - `trivy-image` - Container vulnerabilities
    - `sbom-grype` - SBOM-based vulnerabilities
 
-### **Workflow Logs**
-
-Detailed logs are available in the **Actions** tab:
-
-1. Click **Actions** tab
-2. Click on a workflow run
-3. Expand any job to see detailed logs
-
----
-
-## 🎓 Common Customizations
-
-### **1. Exclude Test Files from SAST**
-
-```yaml
-security:
-  sast:
-    enabled: true
-    exclude_paths: "tests/,**/*test.js,**/*.spec.ts"
-```
-
-### **2. Add Build Artifacts**
-
-```yaml
-build:
-  run_tests: true
-  artifact_path: "dist/"  # Upload dist/ folder
-```
-
-### **3. Scan Infrastructure Code**
-
-```yaml
-security:
-  iac:
-    enabled: true
-    working_directory: "./terraform"
-    frameworks: terraform
-```
-
-### **4. Customize Test Command**
-
-**Node.js:**
-```yaml
-# devx-ci.yaml stays the same
-
-# Modify your package.json:
-{
-  "scripts": {
-    "test": "jest --coverage",
-    "build": "webpack --mode production"
-  }
-}
-```
-
-**Python:**
-```yaml
-build:
-  run_tests: true
-  # Default: python -m pytest
-  # Customize in your project with pytest.ini
-```
-
-**Maven:**
-```yaml
-build:
-  run_tests: true
-  # Default: mvn test -B
-  # Customize in your pom.xml
-```
-
-### **5. Multi-Architecture Docker Builds**
-
-```yaml
-docker:
-  enabled: true
-  image_name: my-app
-  platforms: linux/amd64,linux/arm64
-```
-
-### **6. Docker Build Arguments**
-
-```yaml
-docker:
-  enabled: true
-  image_name: my-app
-  build_args: |
-    VERSION=1.0.0
-    ENVIRONMENT=production
-    BUILD_DATE=${{ github.event.head_commit.timestamp }}
-```
-
----
-
-## 🐛 Common Issues
-
-### **Issue: "Config file not found"**
-
-**Cause:** `devx-ci.yaml` is not in repository root
-
-**Fix:**
-```bash
-# Ensure file exists
-ls -la devx-ci.yaml
-
-# If not, create it
-touch devx-ci.yaml
-# Add configuration...
-```
-
-### **Issue: "Invalid language: nodejs"**
-
-**Cause:** Wrong language value
-
-**Fix:** Must be exactly `node`, `python`, or `maven`:
-```yaml
-project:
-  language: node  # ✅ Correct
-  # NOT: nodejs, javascript, js
-```
-
-### **Issue: "Tests failed"**
-
-**Cause:** Unit tests are failing
-
-**Options:**
-
-1. **Fix the tests** (recommended)
-2. **Temporarily skip tests** (not recommended):
-   ```yaml
-   build:
-     run_tests: false
-   ```
-
-### **Issue: "SAST findings block build"**
-
-**Cause:** Security vulnerabilities found
-
-**Options:**
-
-1. **Fix the vulnerabilities** (recommended)
-2. **Set to audit mode temporarily**:
-   ```yaml
-   security:
-     sast:
-       enabled: true
-       fail_on_findings: false  # Don't block builds
-   ```
-
-3. **View findings:**
-   - Go to **Security → Code scanning**
-   - Review and fix each finding
-
-### **Issue: "Docker build failed - role_to_assume required"**
-
-**Cause:** Using ECR without IAM role
-
-**Fix:** Add IAM role:
-```yaml
-aws:
-  region: us-east-1
-  role_to_assume: arn:aws:iam::123456789012:role/GitHubActionsRole
-```
-
-See [AWS IAM Setup](#aws-iam-setup-for-ecr) below.
-
 ---
 
 ## ☁️ AWS IAM Setup for ECR
 
 ### **1. Create IAM Policy**
-
-Create a policy with ECR permissions:
 
 ```json
 {
@@ -539,12 +422,10 @@ Create a policy with ECR permissions:
 2. Select **Web identity**
 3. **Identity provider:** `token.actions.githubusercontent.com`
 4. **Audience:** `sts.amazonaws.com`
-5. Add the policy you created above
+5. Add the policy above
 6. Name: `GitHubActionsRole`
 
 ### **3. Update Trust Policy**
-
-Edit the role's trust relationship:
 
 ```json
 {
@@ -569,77 +450,94 @@ Edit the role's trust relationship:
 }
 ```
 
-Replace:
-- `YOUR_ACCOUNT_ID` with your AWS account ID
-- `YOUR_ORG/YOUR_REPO` with your GitHub repository
-
-### **4. Copy Role ARN**
-
-Copy the role ARN (looks like: `arn:aws:iam::123456789012:role/GitHubActionsRole`)
-
-### **5. Update devx-ci.yaml**
+### **4. Update devx-ci.yaml**
 
 ```yaml
 aws:
   region: us-east-1
-  role_to_assume: arn:aws:iam::123456789012:role/GitHubActionsRole  # Paste here
+  role_to_assume: arn:aws:iam::123456789012:role/GitHubActionsRole
 ```
 
 ---
 
-## 📚 Next Steps
+## 🐛 Common Issues
 
-Now that your pipeline is running:
+### **Issue: "Config file not found"**
 
-1. **Review Security Findings**
-   - Go to **Security → Code scanning**
-   - Address any findings
+**Cause:** `devx-ci.yaml` is not in repository root
 
-2. **Add Status Badge**
-   ```markdown
-   ![CI Pipeline](https://github.com/your-org/your-repo/workflows/CI%20Pipeline/badge.svg)
+**Fix:** Ensure file exists at repository root:
+```bash
+ls -la devx-ci.yaml
+```
+
+### **Issue: "Invalid language: nodejs"**
+
+**Cause:** Wrong language value
+
+**Fix:** Must be exactly `node`, `python`, or `maven`:
+```yaml
+project:
+  language: node  # ✅ Correct (NOT nodejs, javascript, js)
+```
+
+### **Issue: "Tests failed"**
+
+**Options:**
+1. **Fix the tests** (recommended)
+2. **Temporarily skip tests:**
+   ```yaml
+   build:
+     run_tests: false
    ```
 
-3. **Make Security Checks Required**
-   - Go to **Settings → Branches**
-   - Add branch protection rule
-   - Require **CI Pipeline** status check
+### **Issue: "SAST findings block build"**
 
-4. **Explore Advanced Features**
-   - See [CONFIG_REFERENCE.md](CONFIG_REFERENCE.md) for all options
-   - Check [examples/](../examples/) for more configurations
+**Options:**
+1. **Fix the vulnerabilities** (recommended)
+2. **Set to audit mode:**
+   ```yaml
+   security:
+     sast:
+       fail_on_findings: false
+   ```
 
-5. **Set Up Continuous Deployment**
-   - Add deployment jobs after CI passes
-   - Deploy to your environment
+### **Issue: "twine upload failed"**
 
----
+**Causes:**
+- Wrong `repo_type` (use `pypi` for Python wheels)
+- Invalid Nexus credentials
+- Version already exists in Nexus
 
-## 🆘 Getting Help
-
-**Stuck?**
-
-1. Check [TROUBLESHOOTING.md](TROUBLESHOOTING.md)
-2. Review [CONFIG_REFERENCE.md](CONFIG_REFERENCE.md)
-3. Look at [examples/](../examples/) directory
-
-**Documentation:**
-- [README.md](../README.md) - Overview
-- [ARCHITECTURE.md](ARCHITECTURE.md) - How it works
-- [CONFIG_REFERENCE.md](CONFIG_REFERENCE.md) - All configuration options
-- [TROUBLESHOOTING.md](TROUBLESHOOTING.md) - Common issues
+**Fix:**
+```yaml
+nexus:
+  repo_type: "pypi"  # Not "raw"
+```
 
 ---
 
-## ✅ Checklist
+## ✅ Setup Checklist
 
 Before considering yourself "done":
 
 - [ ] `devx-ci.yaml` created and committed
 - [ ] `.github/workflows/ci.yaml` created and committed
+- [ ] `NEXUS_USERNAME` and `NEXUS_PASSWORD` secrets added
 - [ ] Pipeline runs successfully on push
 - [ ] Tests pass
 - [ ] Security scans pass (or findings addressed)
 - [ ] Docker image builds (if enabled)
 - [ ] Security tab shows scan results
+
 ---
+
+## 📚 Next Steps
+
+1. **Review Security Findings** - Go to Security → Code scanning
+2. **Add Status Badge**
+   ```markdown
+   ![CI Pipeline](https://github.com/your-org/your-repo/workflows/CI%20Pipeline/badge.svg)
+   ```
+3. **Make Security Checks Required** - Settings → Branches → Branch protection
+4. **Explore Advanced Features** - See [CONFIG_REFERENCE.md](CONFIG_REFERENCE.md)

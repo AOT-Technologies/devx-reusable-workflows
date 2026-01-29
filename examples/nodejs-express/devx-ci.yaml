@@ -8,11 +8,17 @@ project:
 
 build:
   run_tests: true                # Run npm test before building
-  artifact_path: "dist/"         # Upload dist/ folder as artifact
+  run_build: true
+  build_script: "npm run build"
+
+nexus:
+  url: "https://nexus.example.com"
+  repository: "npm-hosted"
+  repo_type: "npm"
+  docker_registry_url: "nexus.example.com:8082"
 
 security:
   # SAST: Static Application Security Testing
-  # Scans source code for vulnerabilities, secrets, and bad practices
   sast:
     enabled: true
     scan_path: "./src"           # Only scan source code
@@ -21,25 +27,21 @@ security:
     fail_on_findings: true       # Block pipeline if issues found
   
   # IaC: Infrastructure as Code scanning
-  # Not needed for typical Node.js apps unless you have Terraform/K8s
   iac:
     enabled: false
   
   # Trivy: Container vulnerability scanning
-  # Scans the built Docker image for OS/package vulnerabilities
   trivy:
     enabled: true
     severity: CRITICAL,HIGH      # Block on critical and high severity
     fail_on_vuln: true           # Block pipeline if vulnerabilities found
   
   # SBOM: Software Bill of Materials
-  # Creates an inventory of all dependencies
   sbom:
     enabled: true
     format: cyclonedx-json       # Industry standard format
   
   # SBOM Scan: Vulnerability scanning based on SBOM
-  # Checks SBOM against known CVE databases
   sbom_scan:
     enabled: true
     severity: medium             # Report medium and above
@@ -50,7 +52,7 @@ docker:
   dockerfile: Dockerfile
   image_name: nodejs-express-api # Change to your app name
   image_tag: ""                  # Defaults to git commit SHA
-  registry_type: ecr             # AWS ECR (can be 'generic' for GHCR/DockerHub)
+  registry_type: nexus           # Pushing images to Nexus
   
   # Multi-line build arguments
   build_args: |
@@ -58,19 +60,8 @@ docker:
     BUILD_DATE=${{ github.event.head_commit.timestamp }}
   
   platforms: linux/amd64         # Single platform (faster builds)
-  # For multi-arch: linux/amd64,linux/arm64
 
-# AWS Configuration (required for ECR)
+# AWS Configuration (required if registry_type: ecr)
 aws:
   region: us-east-1
-  role_to_assume: arn:aws:iam::123456789012:role/GitHubActionsRole # Update role_to_assume with your AWS IAM role
-
-# For GHCR instead of ECR, use:
-# docker:
-#   registry_type: generic
-#   registry_url: ghcr.io
-#   image_name: your-org/nodejs-express-api
-# 
-# Then add these secrets to your repo:
-#   REGISTRY_USERNAME: your-github-username
-#   REGISTRY_PASSWORD: github-token-with-packages-write
+  role_to_assume: arn:aws:iam::123456789012:role/GitHubActionsRole

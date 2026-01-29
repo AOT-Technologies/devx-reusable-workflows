@@ -1,14 +1,16 @@
 # devx-ci.yaml Configuration Reference
 
-Complete reference for the `devx-ci.yaml` configuration file.
+Complete reference for all configuration options in the `devx-ci.yaml` file.
 
 ---
 
 ## 📋 Table of Contents
 
-- [Configuration Schema](#configuration-schema)
+- [Minimum Configuration](#minimum-configuration)
+- [Full Configuration Template](#full-configuration-template)
 - [Project Section](#project-section)
 - [Build Section](#build-section)
+- [Nexus Section](#nexus-section)
 - [Security Section](#security-section)
 - [Docker Section](#docker-section)
 - [AWS Section](#aws-section)
@@ -16,68 +18,109 @@ Complete reference for the `devx-ci.yaml` configuration file.
 
 ---
 
-## 🏗️ Configuration Schema
+## 🏗️ Minimum Configuration
 
-### **Minimum Required Configuration**
+The only required field is `project.language`:
 
 ```yaml
 project:
   language: node  # REQUIRED: node | python | maven
 ```
 
-### **Full Configuration Template**
+---
+
+## 📄 Full Configuration Template
 
 ```yaml
+# =============================================================================
+# PROJECT SETTINGS
+# =============================================================================
 project:
-  language: node              # REQUIRED
+  language: node              # REQUIRED: node | python | maven
   version: "20"               # Optional: language version
   working_directory: "."      # Optional: project root
 
+# =============================================================================
+# BUILD SETTINGS
+# =============================================================================
 build:
   run_tests: true             # Optional: run unit tests
-  test_script: ""             # Optional: custom test command
-  build_script: ""            # Optional: custom build command
+  test_script: "test"         # Optional: custom test command
+  run_build: false            # Optional: run build step
+  build_script: "build"       # Optional: custom build command
+  build_command: ""           # Optional: custom build command (Python)
+  maven_args: ""              # Optional: Maven build arguments
   artifact_path: ""           # Optional: path to build output
 
+# =============================================================================
+# NEXUS SETTINGS
+# =============================================================================
+nexus:
+  url: ""                     # Nexus base URL
+  repository: "raw-releases"  # Target repository name
+  repo_type: "raw"            # raw | npm | pypi
+  upload_path: ""             # Custom path (raw mode only)
+  docker_registry_url: ""     # Nexus Docker registry URL
+  docker_repository: "docker-hosted"
+
+# =============================================================================
+# SECURITY SETTINGS
+# =============================================================================
 security:
   sast:
     enabled: true
+    tool: semgrep             # semgrep | sonarqube
     scan_path: "."
     exclude_paths: ""
-    severity: ERROR
+    severity: ERROR           # INFO | WARNING | ERROR
     fail_on_findings: true
+    # SonarQube-specific
+    sonar_host_url: ""
+    sonar_organization: ""
+    sonar_project_key: ""
+    fail_on_quality_gate: true
+    coverage_report_path: ""
   
   iac:
     enabled: false
     working_directory: "."
-    frameworks: ""
+    frameworks: ""            # terraform,kubernetes,cloudformation
     soft_fail: false
+    skip_check: ""            # CKV_AWS_1,CKV_K8S_2
   
   trivy:
     enabled: true
-    severity: CRITICAL,HIGH
+    severity: "CRITICAL,HIGH"
     fail_on_vuln: true
+    ignore_unfixed: true
+    scanners: "vuln,secret,misconfig"
   
   sbom:
     enabled: true
-    format: cyclonedx-json
+    format: cyclonedx-json    # cyclonedx-json | spdx-json
   
   sbom_scan:
     enabled: true
-    severity: medium
+    severity: medium          # negligible | low | medium | high | critical
     format: sarif
 
+# =============================================================================
+# DOCKER SETTINGS
+# =============================================================================
 docker:
   enabled: false
   working_directory: "."
   dockerfile: Dockerfile
   image_name: ""              # REQUIRED if docker.enabled=true
   image_tag: ""               # Optional: defaults to git SHA
-  registry_type: ecr          # ecr | generic
+  registry_type: ecr          # ecr | generic | nexus
   registry_url: ""            # Required for generic
-  build_args: ""
-  platforms: linux/amd64
+  build_args: ""              # Multi-line KEY=VALUE
+  platforms: linux/amd64      # linux/amd64,linux/arm64
 
+# =============================================================================
+# AWS SETTINGS (Required for ECR)
+# =============================================================================
 aws:
   region: us-east-1
   role_to_assume: ""          # Required for ECR
@@ -89,116 +132,134 @@ aws:
 
 Defines your project's language and basic configuration.
 
-### **Fields**
+| Field | Type | Default | Description |
+|-------|------|---------|-------------|
+| `language` | string | **REQUIRED** | `node`, `python`, or `maven` |
+| `version` | string | Auto-detected | Language runtime version |
+| `working_directory` | string | `.` | Directory containing project files |
 
-#### `language` (REQUIRED)
-**Type:** string  
-**Valid Values:** `node` | `python` | `maven`  
-**Description:** Programming language of your project
-
-```yaml
-project:
-  language: node
-```
-
-#### `version` (Optional)
-**Type:** string  
-**Default:** 
-- Node: `"20"`
+**Version Defaults:**
+- Node.js: `"20"`
 - Python: `"3.11"`
 - Maven/Java: `"17"`
 
-**Description:** Language/runtime version to use
-
-```yaml
-project:
-  language: node
-  version: "18"  # Use Node 18 instead of default 20
-```
-
-#### `working_directory` (Optional)
-**Type:** string  
-**Default:** `"."`  
-**Description:** Directory containing your project files
-
+**Example:**
 ```yaml
 project:
   language: python
-  working_directory: "./backend"  # Project is in backend/ subdirectory
+  version: "3.11"
+  working_directory: "./backend"
 ```
 
 ---
 
 ## 🔨 Build Section
 
-Controls build and test execution.
+Controls build and test execution. Fields vary by language.
 
-### **Fields**
+### **Common Fields**
 
-#### `run_tests` (Optional)
-**Type:** boolean  
-**Default:** `true`  
-**Description:** Run unit tests before building
+| Field | Type | Default | Description |
+|-------|------|---------|-------------|
+| `run_tests` | boolean | `true` | Run unit tests before building |
+| `artifact_path` | string | `""` | Path to build output to upload |
 
+### **Node.js Specific**
+
+| Field | Type | Default | Description |
+|-------|------|---------|-------------|
+| `test_script` | string | `"test"` | Script name or command for tests |
+| `run_build` | boolean | `false` | Enable build step |
+| `build_script` | string | `"build"` | Script name or command for build |
+
+**Example:**
 ```yaml
 build:
-  run_tests: true  # Run tests
+  run_tests: true
+  test_script: "test:unit"     # Runs `npm run test:unit`
+  run_build: true
+  build_script: "build"        # Runs `npm run build`
+  artifact_path: "dist/"
 ```
 
-#### `test_script` (Optional)
-**Type:** string  
-**Default:** 
-- Node: `npm test`
-- Python: `python -m pytest`
-- Maven: `mvn test -B`
+### **Python Specific**
 
-**Description:** Custom command to run tests.
+| Field | Type | Default | Description |
+|-------|------|---------|-------------|
+| `test_script` | string | `"python -m pytest"` | Test command |
+| `build_command` | string | `""` | Build command (e.g., `python setup.py bdist_wheel`) |
+| `install_command` | string | `"pip install -r requirements.txt"` | Install command |
 
+**Example:**
 ```yaml
 build:
-  test_script: "npm run test:unit"  # Run specific test script
+  run_tests: true
+  test_script: "python -m pytest -v"
+  build_command: "pip install wheel && python setup.py bdist_wheel"
+  artifact_path: "dist/*.whl"
 ```
 
-#### `build_script` (Optional)
-**Type:** string  
-**Default:** 
-- Node: `npm run build`
-- Python: `""` (none)
-- Maven: `-B clean package ...`
+### **Maven Specific**
 
-**Description:** Custom command to build the application. Set to `none` to skip the build step.
+| Field | Type | Default | Description |
+|-------|------|---------|-------------|
+| `test_script` | string | `"mvn test -B"` | Test command |
+| `maven_args` | string | `-B clean package...` | Maven build arguments |
 
+**Example:**
 ```yaml
 build:
-  build_script: "npm run build:prod"  # Custom build command
+  run_tests: true
+  test_script: "mvn test -B"
+  maven_args: "-B clean package -DskipTests"
+  artifact_path: "target/*.jar"
 ```
 
+---
+
+## 📦 Nexus Section
+
+Configure artifact publishing to Sonatype Nexus.
+
+| Field | Type | Default | Description |
+|-------|------|---------|-------------|
+| `url` | string | `""` | Base URL (e.g., `https://nexus.example.com`) |
+| `repository` | string | `"raw-releases"` | Target repository name |
+| `repo_type` | string | `"raw"` | `npm`, `pypi`, or `raw` |
+| `upload_path` | string | `""` | Custom path (raw mode only) |
+| `docker_registry_url` | string | `""` | Nexus Docker registry URL |
+| `docker_repository` | string | `"docker-hosted"` | Nexus Docker repository name |
+
+### **Repository Types**
+
+| Type | Protocol | Example Repository |
+|------|----------|-------------------|
+| `npm` | Native NPM | `npm-hosted` |
+| `pypi` | Twine upload | `pypi-hosted` |
+| `raw` | HTTP PUT | `raw-releases` |
+
+**NPM Example:**
 ```yaml
-build:
-  build_script: "none"  # Skip build step entirely
+nexus:
+  url: "https://nexus.example.com"
+  repository: "npm-hosted"
+  repo_type: "npm"
 ```
 
-#### `artifact_path` (Optional)
-**Type:** string  
-**Default:** `""` (no artifact upload)  
-**Description:** Path to build output to upload as artifact
-
-**Node.js Example:**
+**PyPI Example:**
 ```yaml
-build:
-  artifact_path: "dist/"  # Upload dist/ directory
-```
-
-**Python Example:**
-```yaml
-build:
-  artifact_path: "dist/*.whl"  # Upload wheel files
+nexus:
+  url: "https://nexus.example.com"
+  repository: "pypi-hosted"
+  repo_type: "pypi"
 ```
 
 **Maven Example:**
 ```yaml
-build:
-  artifact_path: "target/*.jar"  # Upload JAR files
+nexus:
+  url: "https://nexus.example.com"
+  repository: "maven-releases"
+  # repo_type not needed for Maven - uses standard layout
 ```
 
 ---
@@ -209,69 +270,54 @@ Configure security scanning modules.
 
 ### **SAST (Static Application Security Testing)**
 
-Scans source code for vulnerabilities using Semgrep.
+Supports two tools: **Semgrep** (default, free) or **SonarQube** (enterprise).
 
-#### `sast.enabled` (Optional)
-**Type:** boolean  
-**Default:** `true`  
-**Description:** Enable SAST scanning
+#### **Semgrep Configuration**
 
-#### `sast.scan_path` (Optional)
-**Type:** string  
-**Default:** `"."`  
-**Description:** Path to source code
+| Field | Type | Default | Description |
+|-------|------|---------|-------------|
+| `enabled` | boolean | `true` | Enable SAST scanning |
+| `tool` | string | `"semgrep"` | `semgrep` or `sonarqube` |
+| `scan_path` | string | `"."` | Path to source code |
+| `exclude_paths` | string | `""` | Comma-separated paths to exclude |
+| `severity` | string | `"ERROR"` | `INFO`, `WARNING`, or `ERROR` |
+| `fail_on_findings` | boolean | `true` | Block pipeline on findings |
+| `ruleset` | string | `"p/ci"` | Semgrep ruleset |
 
+**Example:**
 ```yaml
 security:
   sast:
     enabled: true
-    scan_path: "./src"  # Only scan src/ directory
-```
-
-#### `sast.exclude_paths` (Optional)
-**Type:** string  
-**Default:** `""`  
-**Description:** Comma-separated paths to exclude
-
-```yaml
-security:
-  sast:
-    exclude_paths: "node_modules/,tests/,vendor/"
-```
-
-#### `sast.severity` (Optional)
-**Type:** string  
-**Default:** `"ERROR"`  
-**Valid Values:** `INFO` | `WARNING` | `ERROR`  
-**Description:** Minimum severity to report
-
-```yaml
-security:
-  sast:
-    severity: WARNING  # Report WARNING and ERROR findings
-```
-
-#### `sast.fail_on_findings` (Optional)
-**Type:** boolean  
-**Default:** `true`  
-**Description:** Fail pipeline if vulnerabilities found
-
-```yaml
-security:
-  sast:
-    fail_on_findings: false  # Audit mode - don't block builds
-```
-
-**Complete SAST Example:**
-```yaml
-security:
-  sast:
-    enabled: true
+    tool: semgrep
     scan_path: "./src"
-    exclude_paths: "tests/,migrations/"
+    exclude_paths: "tests/,migrations/,node_modules/"
     severity: ERROR
     fail_on_findings: true
 ```
+
+#### **SonarQube Configuration**
+
+| Field | Type | Default | Description |
+|-------|------|---------|-------------|
+| `sonar_host_url` | string | `""` | SonarQube server URL |
+| `sonar_organization` | string | `""` | Organization key (SonarCloud) |
+| `sonar_project_key` | string | `""` | Project key |
+| `fail_on_quality_gate` | boolean | `true` | Block on quality gate failure |
+| `coverage_report_path` | string | `""` | Path to coverage report |
+
+**Example:**
+```yaml
+security:
+  sast:
+    enabled: true
+    tool: sonarqube
+    sonar_host_url: "https://sonarqube.example.com"
+    sonar_project_key: "my-project"
+    fail_on_quality_gate: true
+```
+
+**Required Secret:** `SONAR_TOKEN`
 
 ---
 
@@ -279,551 +325,252 @@ security:
 
 Scans infrastructure code using Checkov.
 
-#### `iac.enabled` (Optional)
-**Type:** boolean  
-**Default:** `false`  
-**Description:** Enable IaC scanning
+| Field | Type | Default | Description |
+|-------|------|---------|-------------|
+| `enabled` | boolean | `false` | Enable IaC scanning |
+| `working_directory` | string | `"."` | Directory containing IaC files |
+| `frameworks` | string | `""` | Frameworks to scan (auto-detect if empty) |
+| `soft_fail` | boolean | `false` | Audit mode - don't fail pipeline |
+| `skip_check` | string | `""` | Comma-separated Checkov IDs to skip |
 
-#### `iac.working_directory` (Optional)
-**Type:** string  
-**Default:** `"."`  
-**Description:** Directory containing IaC files
+**Supported Frameworks:**
+- `terraform`
+- `kubernetes`
+- `cloudformation`
+- `arm`
+- `serverless`
+- `helm`
 
-```yaml
-security:
-  iac:
-    enabled: true
-    working_directory: "./terraform"
-```
-
-#### `iac.frameworks` (Optional)
-**Type:** string  
-**Default:** `""` (auto-detect)  
-**Valid Values:** `terraform`, `kubernetes`, `cloudformation`, `arm`, `serverless`  
-**Description:** Specific frameworks to scan
-
-```yaml
-security:
-  iac:
-    enabled: true
-    frameworks: terraform,kubernetes  # Only scan these
-```
-
-#### `iac.soft_fail` (Optional)
-**Type:** boolean  
-**Default:** `false`  
-**Description:** Audit mode - don't block builds on failures
-
-```yaml
-security:
-  iac:
-    enabled: true
-    soft_fail: true  # Report but don't fail
-```
-
-**Complete IaC Example:**
+**Example:**
 ```yaml
 security:
   iac:
     enabled: true
     working_directory: "./infrastructure"
-    frameworks: terraform
-    soft_fail: false  # Block on security issues
+    frameworks: "terraform,kubernetes"
+    soft_fail: false
+    skip_check: "CKV_AWS_18,CKV_AWS_21"
 ```
 
 ---
 
 ### **Trivy (Container/Filesystem Scanning)**
 
-Scans containers and filesystems for vulnerabilities.
+Universal vulnerability scanner.
 
-#### `trivy.enabled` (Optional)
-**Type:** boolean  
-**Default:** `true`  
-**Description:** Enable Trivy scanning
+| Field | Type | Default | Description |
+|-------|------|---------|-------------|
+| `enabled` | boolean | `true` | Enable Trivy scanning |
+| `severity` | string | `"CRITICAL,HIGH"` | Severities to report |
+| `fail_on_vuln` | boolean | `true` | Block pipeline on findings |
+| `ignore_unfixed` | boolean | `true` | Skip vulns with no fix |
+| `scanners` | string | `"vuln,secret,misconfig"` | Types of scans |
 
-#### `trivy.severity` (Optional)
-**Type:** string  
-**Default:** `"CRITICAL,HIGH"`  
-**Valid Values:** `CRITICAL`, `HIGH`, `MEDIUM`, `LOW`, `UNKNOWN`  
-**Description:** Comma-separated severities to report
+**Severity Levels:**
+- `CRITICAL`
+- `HIGH`
+- `MEDIUM`
+- `LOW`
+- `UNKNOWN`
 
+**Example:**
 ```yaml
 security:
   trivy:
     enabled: true
-    severity: CRITICAL,HIGH,MEDIUM  # Include MEDIUM severity
-```
-
-#### `trivy.fail_on_vuln` (Optional)
-**Type:** boolean  
-**Default:** `true`  
-**Description:** Fail pipeline if vulnerabilities found
-
-```yaml
-security:
-  trivy:
-    fail_on_vuln: false  # Audit mode
-```
-
-**Complete Trivy Example:**
-```yaml
-security:
-  trivy:
-    enabled: true
-    severity: CRITICAL,HIGH
+    severity: "CRITICAL,HIGH,MEDIUM"
     fail_on_vuln: true
+    ignore_unfixed: true
+    scanners: "vuln,secret,misconfig"
 ```
 
 ---
 
 ### **SBOM (Software Bill of Materials)**
 
-Generate inventory of software components.
+| Field | Type | Default | Description |
+|-------|------|---------|-------------|
+| `enabled` | boolean | `true` | Enable SBOM generation |
+| `format` | string | `"cyclonedx-json"` | Output format |
 
-#### `sbom.enabled` (Optional)
-**Type:** boolean  
-**Default:** `true`  
-**Description:** Enable SBOM generation
-
-#### `sbom.format` (Optional)
-**Type:** string  
-**Default:** `"cyclonedx-json"`  
-**Valid Values:** `cyclonedx-json`, `cyclonedx-xml`, `spdx-json`, `spdx-tag-value`  
-**Description:** SBOM output format
-
-```yaml
-security:
-  sbom:
-    enabled: true
-    format: spdx-json  # Use SPDX format
-```
+**Formats:**
+- `cyclonedx-json`
+- `cyclonedx-xml`
+- `spdx-json`
+- `spdx-tag-value`
 
 ---
 
 ### **SBOM Scan**
 
-Scan SBOM for vulnerabilities using Grype.
+| Field | Type | Default | Description |
+|-------|------|---------|-------------|
+| `enabled` | boolean | `true` | Enable SBOM vulnerability scan |
+| `severity` | string | `"medium"` | Minimum severity to report |
+| `format` | string | `"sarif"` | Output format |
 
-#### `sbom_scan.enabled` (Optional)
-**Type:** boolean  
-**Default:** `true`  
-**Description:** Enable SBOM vulnerability scanning
-
-#### `sbom_scan.severity` (Optional)
-**Type:** string  
-**Default:** `"medium"`  
-**Valid Values:** `negligible`, `low`, `medium`, `high`, `critical`  
-**Description:** Minimum severity threshold
-
-```yaml
-security:
-  sbom_scan:
-    enabled: true
-    severity: high  # Only report high and critical
-```
-
-#### `sbom_scan.format` (Optional)
-**Type:** string  
-**Default:** `"sarif"`  
-**Valid Values:** `sarif`, `json`, `table`  
-**Description:** Output format
-
-**Complete SBOM Example:**
-```yaml
-security:
-  sbom:
-    enabled: true
-    format: cyclonedx-json
-  sbom_scan:
-    enabled: true
-    severity: medium
-    format: sarif
-```
+**Note:** SBOM scan **never fails** the pipeline - it's report-only.
 
 ---
 
 ## 🐳 Docker Section
 
-Configure Docker image building.
+Configure Docker image building and registry.
 
-### **Fields**
+| Field | Type | Default | Description |
+|-------|------|---------|-------------|
+| `enabled` | boolean | `false` | Enable Docker build |
+| `working_directory` | string | `"."` | Directory with Dockerfile |
+| `dockerfile` | string | `"Dockerfile"` | Dockerfile name |
+| `image_name` | string | **REQUIRED** | Image name |
+| `image_tag` | string | Git SHA | Image tag |
+| `registry_type` | string | `"ecr"` | `ecr`, `generic`, or `nexus` |
+| `registry_url` | string | `""` | Registry URL (generic mode) |
+| `build_args` | string | `""` | Multi-line build arguments |
+| `platforms` | string | `"linux/amd64"` | Target platforms |
 
-#### `docker.enabled` (Optional)
-**Type:** boolean  
-**Default:** `false`  
-**Description:** Enable Docker image building
+### **Registry Types**
 
-#### `docker.working_directory` (Optional)
-**Type:** string  
-**Default:** `"."`  
-**Description:** Directory containing Dockerfile
+| Type | Use Case | Required Fields |
+|------|----------|-----------------|
+| `ecr` | AWS ECR | `aws.role_to_assume` |
+| `generic` | Docker Hub, GHCR | `registry_url`, secrets |
+| `nexus` | Nexus Docker | `nexus.docker_registry_url` |
 
-```yaml
-docker:
-  enabled: true
-  working_directory: "./app"
-```
-
-#### `docker.dockerfile` (Optional)
-**Type:** string  
-**Default:** `"Dockerfile"`  
-**Description:** Dockerfile name
-
-```yaml
-docker:
-  enabled: true
-  dockerfile: "Dockerfile.prod"
-```
-
-#### `docker.image_name` (REQUIRED if enabled)
-**Type:** string  
-**Description:** Docker image name
-
+**Multi-Architecture Example:**
 ```yaml
 docker:
   enabled: true
   image_name: my-app
-```
-
-For Docker Hub with organization:
-```yaml
-docker:
-  enabled: true
-  image_name: myorg/my-app
-```
-
-#### `docker.image_tag` (Optional)
-**Type:** string  
-**Default:** Git commit SHA  
-**Description:** Image tag
-
-```yaml
-docker:
-  enabled: true
-  image_name: my-app
-  image_tag: v1.0.0
-```
-
-#### `docker.registry_type` (Optional)
-**Type:** string  
-**Default:** `"ecr"`  
-**Valid Values:** `ecr` | `generic`  
-**Description:** Container registry type
-
-**ECR (AWS):**
-```yaml
-docker:
-  registry_type: ecr
-```
-
-**GHCR (GitHub):**
-```yaml
-docker:
-  registry_type: generic
-  registry_url: ghcr.io
-```
-
-**Docker Hub:**
-```yaml
-docker:
-  registry_type: generic
-  registry_url: docker.io
-```
-
-#### `docker.registry_url` (Required for generic)
-**Type:** string  
-**Description:** Registry URL for generic mode
-
-```yaml
-docker:
-  registry_type: generic
-  registry_url: ghcr.io
-```
-
-#### `docker.build_args` (Optional)
-**Type:** string (multi-line)  
-**Default:** `""`  
-**Description:** Docker build arguments (KEY=VALUE format)
-
-```yaml
-docker:
+  registry_type: nexus
+  platforms: "linux/amd64,linux/arm64"
   build_args: |
     VERSION=1.0.0
-    BUILD_DATE=2025-01-01
-    ENVIRONMENT=production
-```
-
-#### `docker.platforms` (Optional)
-**Type:** string  
-**Default:** `"linux/amd64"`  
-**Description:** Target platforms (comma-separated)
-
-**Multi-architecture:**
-```yaml
-docker:
-  platforms: linux/amd64,linux/arm64
-```
-
-**Complete Docker Example (ECR):**
-```yaml
-docker:
-  enabled: true
-  working_directory: "."
-  dockerfile: Dockerfile
-  image_name: my-app
-  image_tag: v1.0.0
-  registry_type: ecr
-  build_args: |
-    VERSION=1.0.0
-  platforms: linux/amd64
-```
-
-**Complete Docker Example (GHCR):**
-```yaml
-docker:
-  enabled: true
-  image_name: my-org/my-app
-  registry_type: generic
-  registry_url: ghcr.io
-  platforms: linux/amd64,linux/arm64
+    BUILD_DATE=${{ github.event.head_commit.timestamp }}
 ```
 
 ---
 
 ## ☁️ AWS Section
 
-AWS-specific configuration (required for ECR).
+Required when using ECR.
 
-### **Fields**
+| Field | Type | Default | Description |
+|-------|------|---------|-------------|
+| `region` | string | `"us-east-1"` | AWS region |
+| `role_to_assume` | string | `""` | IAM Role ARN for OIDC |
 
-#### `aws.region` (Optional)
-**Type:** string  
-**Default:** `"us-east-1"`  
-**Description:** AWS region
-
-```yaml
-aws:
-  region: us-west-2
-```
-
-#### `aws.role_to_assume` (Required for ECR)
-**Type:** string  
-**Description:** IAM role ARN for OIDC authentication
-
+**Example:**
 ```yaml
 aws:
   region: us-east-1
   role_to_assume: arn:aws:iam::123456789012:role/GitHubActionsRole
-```
-
-**Complete AWS Example:**
-```yaml
-aws:
-  region: us-east-1
-  role_to_assume: arn:aws:iam::123456789012:role/GitHubActionsRole
-
-docker:
-  enabled: true
-  image_name: my-app
-  registry_type: ecr
 ```
 
 ---
 
 ## 📚 Complete Examples
 
-### **Example 1: Simple Node.js App (No Docker)**
+### **Node.js with NPM and Nexus**
 
 ```yaml
 project:
   language: node
   version: "20"
-  working_directory: "."
 
 build:
   run_tests: true
+  run_build: true
+  build_script: "build"
   artifact_path: "dist/"
+
+nexus:
+  url: "https://nexus.example.com"
+  repository: "npm-hosted"
+  repo_type: "npm"
+  docker_registry_url: "nexus.example.com:8082"
 
 security:
   sast:
     enabled: true
     exclude_paths: "node_modules/,tests/"
-    severity: ERROR
-    fail_on_findings: true
-  
-  iac:
-    enabled: false
-  
   trivy:
     enabled: true
-    severity: CRITICAL,HIGH
-    fail_on_vuln: true
-  
-  sbom:
-    enabled: true
-    format: cyclonedx-json
-  
-  sbom_scan:
-    enabled: true
-    severity: medium
 
 docker:
-  enabled: false
+  enabled: true
+  image_name: my-node-app
+  registry_type: nexus
 ```
 
 ---
 
-### **Example 2: Python with Docker (ECR)**
+### **Python with PyPI and SonarQube**
 
 ```yaml
 project:
   language: python
   version: "3.11"
-  working_directory: "."
 
 build:
   run_tests: true
-  artifact_path: "dist/"
+  build_command: "pip install wheel && python setup.py bdist_wheel"
+  artifact_path: "dist/*.whl"
+
+nexus:
+  url: "https://nexus.example.com"
+  repository: "pypi-hosted"
+  repo_type: "pypi"
 
 security:
   sast:
     enabled: true
-    scan_path: "./src"
-    severity: ERROR
-    fail_on_findings: true
-  
+    tool: sonarqube
+    sonar_host_url: "https://sonar.example.com"
+    sonar_project_key: "my-python-app"
   trivy:
-    enabled: true
-    severity: CRITICAL,HIGH
-    fail_on_vuln: true
-  
-  sbom:
     enabled: true
 
 docker:
   enabled: true
   image_name: my-python-app
-  registry_type: ecr
-  dockerfile: Dockerfile
-  platforms: linux/amd64
-
-aws:
-  region: us-east-1
-  role_to_assume: arn:aws:iam::123456789012:role/GitHubActionsRole
+  registry_type: nexus
 ```
 
 ---
 
-### **Example 3: Java with IaC Scanning**
+### **Java with Maven and IaC Scanning**
 
 ```yaml
 project:
   language: maven
   version: "17"
-  working_directory: "."
 
 build:
   run_tests: true
+  maven_args: "-B clean package -DskipTests"
   artifact_path: "target/*.jar"
+
+nexus:
+  url: "https://nexus.example.com"
+  repository: "maven-releases"
 
 security:
   sast:
     enabled: true
-    severity: ERROR
-    fail_on_findings: true
-  
   iac:
     enabled: true
     working_directory: "./terraform"
-    frameworks: terraform
-    soft_fail: false
-  
+    frameworks: "terraform"
   trivy:
     enabled: true
-    severity: CRITICAL,HIGH
-    fail_on_vuln: true
-  
-  sbom:
-    enabled: true
-    format: spdx-json
 
 docker:
   enabled: true
   image_name: my-java-app
   registry_type: ecr
-  build_args: |
-    JAR_FILE=target/app.jar
-    JAVA_OPTS=-Xmx512m
 
 aws:
   region: us-east-1
   role_to_assume: arn:aws:iam::123456789012:role/GitHubActionsRole
-```
-
----
-
-### **Example 4: Multi-Service Monorepo**
-
-```yaml
-project:
-  language: node
-  version: "20"
-  working_directory: "./services/api"  # Build only API service
-
-build:
-  run_tests: true
-  artifact_path: "dist/"
-
-security:
-  sast:
-    enabled: true
-    scan_path: "./services"  # Scan all services
-    exclude_paths: "node_modules/,tests/"
-  
-  iac:
-    enabled: true
-    working_directory: "./infrastructure"
-    frameworks: terraform,kubernetes
-  
-  trivy:
-    enabled: true
-
-docker:
-  enabled: true
-  working_directory: "./services/api"
-  image_name: api-service
-  registry_type: generic
-  registry_url: ghcr.io
-
-aws:
-  region: us-east-1
-```
-
----
-
-### **Example 5: Development Environment (Lenient)**
-
-```yaml
-project:
-  language: node
-  version: "20"
-
-build:
-  run_tests: true
-
-security:
-  sast:
-    enabled: true
-    fail_on_findings: false  # Don't block on dev
-
-  trivy:
-    enabled: true
-    fail_on_vuln: false  # Don't block on dev
-  
-  sbom:
-    enabled: false  # Skip SBOM in dev
-
-docker:
-  enabled: false  # Build locally
 ```

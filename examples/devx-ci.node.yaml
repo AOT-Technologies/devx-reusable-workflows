@@ -1,25 +1,29 @@
+# Example DevX CI Config for Node.js
 project:
   language: node
   version: "20"
+  working_directory: "."
 
 build:
+  run_tests: true
   run_build: true
-  build_script: "build"
-  # Path to the artifact created by the build (e.g., a zip or tgz)
-  artifact_path: "dist.tgz"
+  build_script: "npm run build"
 
-artifactory:
-  enabled: true
-  url: "https://your-jfrog-instance.jfrog.io/artifactory"
-  repository: "node-repo-local"
-  artifact_file: "app-dist.tgz"
-  # For non-maven, use upload_path
-  upload_path: "my-node-app/1.0.0/app-dist.tgz"
+nexus:
+  url: "https://nexus.example.com"
+  repository: "npm-hosted"
+  repo_type: "npm"
+  docker_registry_url: "nexus.example.com:8082"
+
+security:
+  sast:
+    enabled: true
+  trivy:
+    enabled: true
+  sbom:
+    enabled: true
 
 docker:
   enabled: true
-  image_name: my-node-app
-  build_args: |
-    ARTIFACTORY_URL=https://your-jfrog-instance.jfrog.io/artifactory
-    ARTIFACTORY_REPO=node-repo-local
-    ARTIFACT_PATH=my-node-app/1.0.0/app-dist.tgz
+  image_name: demo-node-app
+  registry_type: nexus
