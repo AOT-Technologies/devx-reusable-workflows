@@ -225,7 +225,6 @@ jobs:
             # Create base64 auth
             AUTH=$(echo -n "${{ secrets.NEXUS_USERNAME }}:${{ secrets.NEXUS_PASSWORD }}" | base64)
             npm config set _auth "$AUTH"
-            npm config set always-auth true
             
             # Publish
             npm publish --registry "$REGISTRY_URL"
@@ -279,6 +278,17 @@ jobs:
               echo "✅ Upload successful!"
               echo "path=$UPLOAD_PATH" >> $GITHUB_OUTPUT
               echo "url=$FULL_URL" >> $GITHUB_OUTPUT
+              
+              # Verify upload
+              VERIFY_STATUS=$(curl -s -o /dev/null -w "%{http_code}" \
+                -u '${{ secrets.NEXUS_USERNAME }}:${{ secrets.NEXUS_PASSWORD }}' \
+                "$FULL_URL")
+              
+              if [[ "$VERIFY_STATUS" -eq 200 ]]; then
+                echo "✅ Artifact verified in Nexus"
+              else
+                echo "::warning::Could not verify artifact (HTTP $VERIFY_STATUS)"
+              fi
             else
               echo "::error::Upload failed with status $HTTP_STATUS"
               cat response.txt
