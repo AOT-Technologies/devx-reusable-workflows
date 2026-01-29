@@ -219,15 +219,19 @@ jobs:
             CLEAN_URL=$(echo "${{ inputs.nexus_url }}" | sed 's:/*$::')
             REGISTRY_URL="${CLEAN_URL}/repository/${{ inputs.nexus_repository }}/"
             
-            # Configure npm for Nexus
-            npm config set registry "$REGISTRY_URL"
+            # Configure npm for Nexus using .npmrc for better scoped auth support
+            # Remove protocol (http/https) for the auth key
+            AUTH_KEY=$(echo "$REGISTRY_URL" | sed 's:^https\?:::')
             
             # Create base64 auth
             AUTH=$(echo -n "${{ secrets.NEXUS_USERNAME }}:${{ secrets.NEXUS_PASSWORD }}" | base64)
-            npm config set _auth "$AUTH"
+            
+            echo "registry=$REGISTRY_URL" > .npmrc
+            echo "${AUTH_KEY}:_auth=$AUTH" >> .npmrc
+            echo "${AUTH_KEY}:always-auth=true" >> .npmrc
             
             # Publish
-            npm publish --registry "$REGISTRY_URL"
+            npm publish
             
             # Construct the download path for docker-build.yaml
             # Nexus NPM path: [package-name]/-/[package-name-without-scope]-[version].tgz
