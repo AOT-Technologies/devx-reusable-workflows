@@ -211,6 +211,9 @@ jobs:
       - name: Upload to Nexus
         if: inputs.nexus_url != ''
         id: upload_nexus
+        env:
+          NEXUS_USER: ${{ secrets.NEXUS_USERNAME }}
+          NEXUS_PASS: ${{ secrets.NEXUS_PASSWORD }}
         run: |
           if [[ "${{ inputs.nexus_repo_type }}" == "npm" ]]; then
             echo "📤 Publishing to native NPM repository..."
@@ -222,12 +225,12 @@ jobs:
             # Remove protocol for the auth key
             AUTH_KEY=$(echo "$REGISTRY_URL" | sed 's|^https:||' | sed 's|^http:||')
             
-            # Create base64 auth
-            AUTH=$(printf "%s:%s" "${{ secrets.NEXUS_USERNAME }}" "${{ secrets.NEXUS_PASSWORD }}" | base64 -w 0)
+            # Create base64 auth (using environment variables prevents shell expansion)
+            AUTH=$(printf "%s:%s" "$NEXUS_USER" "$NEXUS_PASS" | base64 -w 0)
             
             # Verify credentials with curl first
             echo "🔍 Verifying credentials with curl..."
-            HTTP_STATUS=$(curl -s -o /dev/null -w "%{http_code}" -u "${{ secrets.NEXUS_USERNAME }}:${{ secrets.NEXUS_PASSWORD }}" "$REGISTRY_URL")
+            HTTP_STATUS=$(curl -s -o /dev/null -w "%{http_code}" -u "$NEXUS_USER:$NEXUS_PASS" "$REGISTRY_URL")
             if [[ "$HTTP_STATUS" -eq 200 || "$HTTP_STATUS" -eq 404 ]]; then
               echo "✅ Credentials verified (HTTP $HTTP_STATUS)"
             else
@@ -281,7 +284,7 @@ jobs:
             
             # Upload to Nexus
             HTTP_STATUS=$(curl -s \
-              -u '${{ secrets.NEXUS_USERNAME }}:${{ secrets.NEXUS_PASSWORD }}' \
+              -u "$NEXUS_USER:$NEXUS_PASS" \
               -X PUT \
               -T "$ARTIFACT_FILE" \
               -w "%{http_code}" \
@@ -292,6 +295,17 @@ jobs:
               echo "✅ Upload successful!"
               echo "path=$UPLOAD_PATH" >> $GITHUB_OUTPUT
               echo "url=$FULL_URL" >> $GITHUB_OUTPUT
+              
+              # Verify upload
+              VERIFY_STATUS=$(curl -s -o /dev/null -w "%{http_code}" \
+                -u "$NEXUS_USER:$NEXUS_PASS" \
+                "$FULL_URL")
+              
+              if [[ "$VERIFY_STATUS" -eq 200 ]]; then
+                echo "✅ Artifact verified in Nexus"
+              else
+                echo "::warning::Could not verify artifact (HTTP $VERIFY_STATUS)"
+              fi
             else
               echo "::error::Upload failed with status $HTTP_STATUS"
               cat response.txt
