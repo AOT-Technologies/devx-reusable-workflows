@@ -293,8 +293,8 @@ jobs:
       nexus_docker_repo: ${{ fromJson(needs.load-config.outputs.config).nexus.docker_repository || 'docker-hosted' }}
       # Nexus Artifact Download (Optimization)
       nexus_artifact_base_url: ${{ fromJson(needs.load-config.outputs.config).nexus.url || '' }}
-      nexus_artifact_repo: ${{ fromJson(needs.load-config.outputs.config).nexus.repository || 'maven-releases' }}
-      nexus_artifact_path: ${{ needs.build-maven.outputs.nexus_path || '' }}
+      nexus_artifact_repo: ${{ fromJson(needs.load-config.outputs.config).nexus.repository || (needs.load-config.outputs.language == 'maven' && 'maven-releases' || 'raw-releases') }}
+      nexus_artifact_path: ${{ needs.build-maven.outputs.nexus_path || needs.build-node.outputs.nexus_path || needs.build-python.outputs.nexus_path || '' }}
       # Build configuration
       build_args: ${{ fromJson(needs.load-config.outputs.config).docker.build_args || '' }}
       platforms: ${{ fromJson(needs.load-config.outputs.config).docker.platforms || 'linux/amd64' }}

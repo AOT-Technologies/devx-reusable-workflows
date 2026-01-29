@@ -186,6 +186,194 @@ jobs:
           # Use first file if multiple match
           ARTIFACT_FILE="${ARTIFACT_FILES[0]}"
           FILENAME=$(basename "$ARTIFACT_FILE")
+name: "Module: Node Build"
+# ------------------------------------------------------------------------------
+# Deterministic Node.js build with caching, unit tests, artifact upload.
+# Uploads directly to Nexus
+# ------------------------------------------------------------------------------
+
+on:
+  workflow_call:
+    inputs:
+      working_directory:
+        type: string
+        default: "."
+      node_version:
+        type: string
+        default: "20"
+      # --- TEST INPUTS ---
+      run_tests:
+        description: "Run unit tests?"
+        type: boolean
+        default: true
+      test_script:
+        description: "Script to run tests"
+        type: string
+        default: "test"
+      # --- BUILD INPUTS ---
+      run_build:
+        description: "Enable build step?"
+        type: boolean
+        default: false
+      build_script:
+        description: "Script name (e.g., 'build') or full command (e.g., 'npm run build && tar ...')"
+        type: string
+        default: "build"
+      artifact_path:
+        type: string
+        default: ""
+      artifact_name:
+        description: "Name of the artifact to upload. If blank, a default name will be used."
+        type: string
+        default: ""
+      
+      # --- NEXUS INPUTS ---
+      nexus_url:
+        description: "Nexus base URL (e.g., https://nexus.company.com)"
+        type: string
+        required: true
+      nexus_repository:
+        description: "Target repository (e.g., raw-releases)"
+        type: string
+        default: "raw-releases"
+      nexus_path:
+        description: "Custom upload path in Nexus (e.g., @org/package/1.0.0/package.tgz)"
+        type: string
+        default: ""
+
+    secrets:
+      NEXUS_USERNAME:
+        description: "Nexus username"
+        required: false
+      NEXUS_PASSWORD:
+        description: "Nexus password/token"
+        required: false
+
+    outputs:
+      # --- NEXUS OUTPUTS ---
+      nexus_path:
+        description: "Path to artifact in Nexus"
+        value: ${{ jobs.build.outputs.nexus_upload_path }}
+      artifact_file:
+        description: "Artifact filename"
+        value: ${{ jobs.build.outputs.artifact_file }}
+
+  # Allow manual trigger for testing
+  workflow_dispatch:
+    inputs:
+      working_directory:
+        description: "Working directory"
+        type: string
+        default: "."
+      node_version:
+        description: "Node version"
+        type: string
+        default: "20"
+      run_tests:
+        description: "Run tests"
+        type: boolean
+        default: true
+      test_script:
+        description: "Test script"
+        type: string
+        default: "test"
+      run_build:
+        description: "Run build"
+        type: boolean
+        default: false
+      build_script:
+        description: "Build script"
+        type: string
+        default: "build"
+      artifact_path:
+        description: "Artifact path"
+        type: string
+        default: ""
+      upload_to_nexus:
+        description: "Upload to Nexus"
+        type: boolean
+        default: false
+
+permissions:
+  contents: read
+  actions: write
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    defaults:
+      run:
+        working-directory: ${{ inputs.working_directory }}
+    outputs:
+      nexus_upload_path: ${{ steps.upload_nexus.outputs.path }}
+      artifact_file: ${{ steps.detect_artifact.outputs.filename }}
+    
+    steps:
+      - name: Checkout Code
+        uses: actions/checkout@v4.1.1
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v4.0.2
+        with:
+          node-version: ${{ inputs.node_version }}
+          cache: npm
+          cache-dependency-path: ${{ inputs.working_directory }}/package-lock.json
+
+      - name: Install Dependencies
+        run: npm ci --prefer-offline --no-audit
+
+      - name: Run Unit Tests
+        if: inputs.run_tests == true
+        run: |
+          # Check if test script exists in package.json
+          if npm run | grep -q "^  ${{ inputs.test_script }}$"; then
+            npm run ${{ inputs.test_script }}
+          else
+            echo "::warning::Test script '${{ inputs.test_script }}' not found in package.json. Skipping tests."
+          fi
+
+      - name: Upload Test Results
+        if: always() && inputs.run_tests == true
+        uses: actions/upload-artifact@v4.3.1
+        with:
+          name: node-test-results-${{ github.run_id }}
+          path: |
+            ${{ inputs.working_directory }}/coverage/
+            ${{ inputs.working_directory }}/test-results/
+            ${{ inputs.working_directory }}/junit.xml
+          retention-days: 30
+          if-no-files-found: ignore
+
+      - name: Build Application
+        if: inputs.run_build == true
+        run: |
+          # If build_script is a script name in package.json, use npm run
+          # Otherwise, execute it as a raw shell command
+          if npm run | grep -q "^  ${{ inputs.build_script }}$"; then
+            echo "🚀 Running npm script: ${{ inputs.build_script }}"
+            npm run ${{ inputs.build_script }}
+          else
+            echo "🚀 Running custom build command: ${{ inputs.build_script }}"
+            ${{ inputs.build_script }}
+          fi
+
+      # --- DETECT ARTIFACT FILE ---
+      - name: Detect Artifact File
+        if: inputs.artifact_path != ''
+        id: detect_artifact
+        run: |
+          # Find the actual file from artifact_path pattern
+          ARTIFACT_FILES=(${{ inputs.artifact_path }})
+          
+          if [[ ${#ARTIFACT_FILES[@]} -eq 0 ]]; then
+            echo "::error::No files found matching pattern: ${{ inputs.artifact_path }}"
+            exit 1
+          fi
+          
+          # Use first file if multiple match
+          ARTIFACT_FILE="${ARTIFACT_FILES[0]}"
+          FILENAME=$(basename "$ARTIFACT_FILE")
           
           echo "filename=$FILENAME" >> $GITHUB_OUTPUT
           echo "fullpath=$ARTIFACT_FILE" >> $GITHUB_OUTPUT
@@ -193,7 +381,7 @@ jobs:
 
       # --- UPLOAD TO NEXUS ---
       - name: Upload to Nexus
-        if: inputs.artifact_path != ''
+        if: inputs.artifact_path != '' && inputs.nexus_url != ''
         id: upload_nexus
         run: |
           ARTIFACT_FILE="${{ steps.detect_artifact.outputs.fullpath }}"
@@ -231,6 +419,17 @@ jobs:
             echo "✅ Upload successful!"
             echo "path=$UPLOAD_PATH" >> $GITHUB_OUTPUT
             echo "url=$FULL_URL" >> $GITHUB_OUTPUT
+            
+            # Verify upload
+            VERIFY_STATUS=$(curl -s -o /dev/null -w "%{http_code}" \
+              -u '${{ secrets.NEXUS_USERNAME }}:${{ secrets.NEXUS_PASSWORD }}' \
+              "$FULL_URL")
+            
+            if [[ "$VERIFY_STATUS" -eq 200 ]]; then
+              echo "✅ Artifact verified in Nexus"
+            else
+              echo "::warning::Could not verify artifact (HTTP $VERIFY_STATUS)"
+            fi
           else
             echo "::error::Upload failed with status $HTTP_STATUS"
             cat response.txt
