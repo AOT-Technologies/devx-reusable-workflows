@@ -232,6 +232,7 @@ jobs:
       # Nexus configuration
       nexus_url: ${{ fromJson(needs.load-config.outputs.config).nexus.url || '' }}
       nexus_repository: ${{ fromJson(needs.load-config.outputs.config).nexus.repository || 'raw-releases' }}
+      nexus_repo_type: ${{ fromJson(needs.load-config.outputs.config).nexus.repo_type || 'raw' }}
       nexus_path: ${{ fromJson(needs.load-config.outputs.config).nexus.upload_path || '' }}
 
   build-maven:

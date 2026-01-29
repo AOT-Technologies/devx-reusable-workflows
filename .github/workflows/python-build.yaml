@@ -50,6 +50,10 @@ on:
         description: "Target repository (e.g., raw-releases)"
         type: string
         default: "raw-releases"
+      nexus_repo_type:
+        description: "Type of Nexus repository: 'raw' or 'pypi'"
+        type: string
+        default: "raw"
       nexus_path:
         description: "Custom upload path in Nexus (e.g., package/1.0.0/package.whl)"
         type: string
@@ -103,10 +107,21 @@ on:
         description: "Artifact path"
         type: string
         default: ""
-      upload_to_nexus:
-        description: "Upload to Nexus"
-        type: boolean
-        default: false
+      nexus_url:
+        description: "Nexus URL"
+        type: string
+        required: true
+      nexus_repository:
+        description: "Nexus Repository"
+        type: string
+        default: "raw-releases"
+      nexus_repo_type:
+        description: "Nexus Repo Type"
+        type: choice
+        options:
+          - raw
+          - pypi
+        default: "raw"
 
 permissions:
   contents: read
@@ -205,55 +220,93 @@ jobs:
           NEXUS_URL: ${{ inputs.nexus_url }}
           NEXUS_REPO: ${{ inputs.nexus_repository }}
           NEXUS_PATH: ${{ inputs.nexus_path }}
+          NEXUS_REPO_TYPE: ${{ inputs.nexus_repo_type }}
         run: |
           ARTIFACT_FILE="${{ steps.detect_artifact.outputs.fullpath }}"
           
-          # Determine upload path
-          if [[ -n "$NEXUS_PATH" ]]; then
-            UPLOAD_PATH="$NEXUS_PATH"
-          else
-            # Default: use filename in generic path
-            UPLOAD_PATH="generic/${{ steps.detect_artifact.outputs.filename }}"
-          fi
-          
-          FULL_URL="${NEXUS_URL}/repository/${NEXUS_REPO}/${UPLOAD_PATH}"
-          
-          echo "📤 Uploading to Nexus..."
-          echo "File: $ARTIFACT_FILE"
-          echo "URL: $FULL_URL"
-          
-          # Verify file exists
-          if [[ ! -f "$ARTIFACT_FILE" ]]; then
-            echo "::error::Build artifact not found: $ARTIFACT_FILE"
-            exit 1
-          fi
-          
-          # Upload to Nexus (using environment variables prevents shell expansion)
-          HTTP_STATUS=$(curl -s \
-            -u "$NEXUS_USER:$NEXUS_PASS" \
-            -X PUT \
-            -T "$ARTIFACT_FILE" \
-            -w "%{http_code}" \
-            -o response.txt \
-            "$FULL_URL")
-          
-          if [[ "$HTTP_STATUS" -eq 200 || "$HTTP_STATUS" -eq 201 ]]; then
-            echo "✅ Upload successful!"
-            echo "path=$UPLOAD_PATH" >> $GITHUB_OUTPUT
-            echo "url=$FULL_URL" >> $GITHUB_OUTPUT
+          if [[ "$NEXUS_REPO_TYPE" == "pypi" ]]; then
+            echo "📤 Uploading to PyPI repository using twine..."
             
-            # Verify upload
-            VERIFY_STATUS=$(curl -s -o /dev/null -w "%{http_code}" \
+            # Install twine if not present
+            pip install twine
+            
+            # Construct PyPI URL
+            # Nexus PyPI URL format: [nexus-url]/repository/[repo-name]/
+            PYPI_URL="${NEXUS_URL}/repository/${NEXUS_REPO}/"
+            
+            # Upload using twine
+            # We use environment variables for authentication
+            TWINE_USERNAME="$NEXUS_USER" \
+            TWINE_PASSWORD="$NEXUS_PASS" \
+            TWINE_REPOSITORY_URL="$PYPI_URL" \
+            twine upload --skip-existing "$ARTIFACT_FILE"
+            
+            # Construct the download path for docker-build.yaml
+            # For Nexus PyPI, the path is usually: packages/[package-name]/[version]/[filename]
+            # We can extract package name and version from the filename or setup.py
+            # For now, we'll try to extract it from the wheel filename
+            # Example: demo_python_app-1.0.0-py3-none-any.whl -> packages/demo-python-app/1.0.0/demo_python_app-1.0.0-py3-none-any.whl
+            
+            FILENAME=$(basename "$ARTIFACT_FILE")
+            # demo_python_app-1.0.0-py3-none-any.whl -> demo_python_app
+            PKG_NAME=$(echo "$FILENAME" | cut -d'-' -f1 | tr '_' '-')
+            # demo_python_app-1.0.0-py3-none-any.whl -> 1.0.0
+            PKG_VERSION=$(echo "$FILENAME" | cut -d'-' -f2)
+            
+            UPLOAD_PATH="packages/${PKG_NAME}/${PKG_VERSION}/${FILENAME}"
+            
+            echo "path=$UPLOAD_PATH" >> $GITHUB_OUTPUT
+            echo "✅ Published successfully to PyPI registry"
+            
+          else
+            echo "📤 Uploading to RAW repository..."
+            
+            # Determine upload path
+            if [[ -n "$NEXUS_PATH" ]]; then
+              UPLOAD_PATH="$NEXUS_PATH"
+            else
+              # Default: use filename in generic path
+              UPLOAD_PATH="generic/${{ steps.detect_artifact.outputs.filename }}"
+            fi
+            
+            FULL_URL="${NEXUS_URL}/repository/${NEXUS_REPO}/${UPLOAD_PATH}"
+            
+            echo "File: $ARTIFACT_FILE"
+            echo "URL: $FULL_URL"
+            
+            # Verify file exists
+            if [[ ! -f "$ARTIFACT_FILE" ]]; then
+              echo "::error::Build artifact not found: $ARTIFACT_FILE"
+              exit 1
+            fi
+            
+            # Upload to Nexus (using environment variables prevents shell expansion)
+            HTTP_STATUS=$(curl -s \
               -u "$NEXUS_USER:$NEXUS_PASS" \
+              -X PUT \
+              -T "$ARTIFACT_FILE" \
+              -w "%{http_code}" \
+              -o response.txt \
               "$FULL_URL")
             
-            if [[ "$VERIFY_STATUS" -eq 200 ]]; then
-              echo "✅ Artifact verified in Nexus"
+            if [[ "$HTTP_STATUS" -eq 200 || "$HTTP_STATUS" -eq 201 ]]; then
+              echo "✅ Upload successful!"
+              echo "path=$UPLOAD_PATH" >> $GITHUB_OUTPUT
+              echo "url=$FULL_URL" >> $GITHUB_OUTPUT
+              
+              # Verify upload
+              VERIFY_STATUS=$(curl -s -o /dev/null -w "%{http_code}" \
+                -u "$NEXUS_USER:$NEXUS_PASS" \
+                "$FULL_URL")
+              
+              if [[ "$VERIFY_STATUS" -eq 200 ]]; then
+                echo "✅ Artifact verified in Nexus"
+              else
+                echo "::warning::Could not verify artifact (HTTP $VERIFY_STATUS)"
+              fi
             else
-              echo "::warning::Could not verify artifact (HTTP $VERIFY_STATUS)"
+              echo "::error::Upload failed with status $HTTP_STATUS"
+              cat response.txt
+              exit 1
             fi
-          else
-            echo "::error::Upload failed with status $HTTP_STATUS"
-            cat response.txt
-            exit 1
           fi
