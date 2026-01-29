@@ -199,18 +199,24 @@ jobs:
       - name: Upload to Nexus
         if: inputs.artifact_path != '' && inputs.nexus_url != ''
         id: upload_nexus
+        env:
+          NEXUS_USER: ${{ secrets.NEXUS_USERNAME }}
+          NEXUS_PASS: ${{ secrets.NEXUS_PASSWORD }}
+          NEXUS_URL: ${{ inputs.nexus_url }}
+          NEXUS_REPO: ${{ inputs.nexus_repository }}
+          NEXUS_PATH: ${{ inputs.nexus_path }}
         run: |
           ARTIFACT_FILE="${{ steps.detect_artifact.outputs.fullpath }}"
           
           # Determine upload path
-          if [[ -n "${{ inputs.nexus_path }}" ]]; then
-            UPLOAD_PATH="${{ inputs.nexus_path }}"
+          if [[ -n "$NEXUS_PATH" ]]; then
+            UPLOAD_PATH="$NEXUS_PATH"
           else
             # Default: use filename in generic path
             UPLOAD_PATH="generic/${{ steps.detect_artifact.outputs.filename }}"
           fi
           
-          FULL_URL="${{ inputs.nexus_url }}/repository/${{ inputs.nexus_repository }}/${UPLOAD_PATH}"
+          FULL_URL="${NEXUS_URL}/repository/${NEXUS_REPO}/${UPLOAD_PATH}"
           
           echo "📤 Uploading to Nexus..."
           echo "File: $ARTIFACT_FILE"
@@ -222,9 +228,9 @@ jobs:
             exit 1
           fi
           
-          # Upload to Nexus
+          # Upload to Nexus (using environment variables prevents shell expansion)
           HTTP_STATUS=$(curl -s \
-            -u '${{ secrets.NEXUS_USERNAME }}:${{ secrets.NEXUS_PASSWORD }}' \
+            -u "$NEXUS_USER:$NEXUS_PASS" \
             -X PUT \
             -T "$ARTIFACT_FILE" \
             -w "%{http_code}" \
@@ -238,7 +244,7 @@ jobs:
             
             # Verify upload
             VERIFY_STATUS=$(curl -s -o /dev/null -w "%{http_code}" \
-              -u '${{ secrets.NEXUS_USERNAME }}:${{ secrets.NEXUS_PASSWORD }}' \
+              -u "$NEXUS_USER:$NEXUS_PASS" \
               "$FULL_URL")
             
             if [[ "$VERIFY_STATUS" -eq 200 ]]; then

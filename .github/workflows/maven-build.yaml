@@ -206,21 +206,26 @@ jobs:
       - name: Upload to Nexus
         if: inputs.nexus_url != ''
         id: upload_nexus
+        env:
+          NEXUS_USER: ${{ secrets.NEXUS_USERNAME }}
+          NEXUS_PASS: ${{ secrets.NEXUS_PASSWORD }}
+          NEXUS_URL: ${{ inputs.nexus_url }}
+          NEXUS_REPO: ${{ inputs.nexus_repository }}
+          GROUP_ID: ${{ steps.maven_coords.outputs.group_id }}
+          ARTIFACT_ID: ${{ steps.maven_coords.outputs.artifact_id }}
+          VERSION: ${{ steps.maven_coords.outputs.version }}
+          PACKAGING: ${{ steps.maven_coords.outputs.packaging }}
         run: |
           JAR_FILE="${{ steps.detect_artifact.outputs.fullpath }}"
           
-          GROUP_PATH=$(echo "${{ steps.maven_coords.outputs.group_id }}" | tr '.' '/')
-          VERSION="${{ steps.maven_coords.outputs.version }}"
-          ARTIFACT_ID="${{ steps.maven_coords.outputs.artifact_id }}"
-          PACKAGING="${{ steps.maven_coords.outputs.packaging }}"
+          GROUP_PATH=$(echo "$GROUP_ID" | tr '.' '/')
           
           # CRITICAL: For Maven 2 repositories, the path MUST follow the layout:
           # [groupId path]/[artifactId]/[version]/[artifactId]-[version].[extension]
-          # Nexus will reject uploads that don't match this layout with a 400 error.
           REMOTE_FILENAME="${ARTIFACT_ID}-${VERSION}.${PACKAGING}"
           
           ARTIFACT_PATH="${GROUP_PATH}/${ARTIFACT_ID}/${VERSION}/${REMOTE_FILENAME}"
-          FULL_URL="${{ inputs.nexus_url }}/repository/${{ inputs.nexus_repository }}/${ARTIFACT_PATH}"
+          FULL_URL="${NEXUS_URL}/repository/${NEXUS_REPO}/${ARTIFACT_PATH}"
           
           echo "📤 Uploading to Nexus..."
           echo "   Local File: $JAR_FILE"
@@ -237,9 +242,9 @@ jobs:
           FILE_SIZE=$(stat -c%s "$JAR_FILE" 2>/dev/null || stat -f%z "$JAR_FILE")
           echo "   Size: $FILE_SIZE bytes"
           
-          # Upload to Nexus
+          # Upload to Nexus (using environment variables prevents shell expansion)
           HTTP_STATUS=$(curl -s \
-            -u '${{ secrets.NEXUS_USERNAME }}:${{ secrets.NEXUS_PASSWORD }}' \
+            -u "$NEXUS_USER:$NEXUS_PASS" \
             -X PUT \
             -T "$JAR_FILE" \
             -w "%{http_code}" \
@@ -255,7 +260,7 @@ jobs:
             
             # Verify upload
             VERIFY_STATUS=$(curl -s -o /dev/null -w "%{http_code}" \
-              -u '${{ secrets.NEXUS_USERNAME }}:${{ secrets.NEXUS_PASSWORD }}' \
+              -u "$NEXUS_USER:$NEXUS_PASS" \
               "$FULL_URL")
             
             if [[ "$VERIFY_STATUS" -eq 200 ]]; then

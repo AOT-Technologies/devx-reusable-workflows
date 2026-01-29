@@ -192,22 +192,29 @@ jobs:
       - name: Download Artifact from Nexus
         if: inputs.registry_type == 'nexus' && inputs.nexus_artifact_path != ''
         id: download
+        env:
+          NEXUS_USER: ${{ secrets.NEXUS_USERNAME }}
+          NEXUS_PASS: ${{ secrets.NEXUS_PASSWORD }}
+          ARTIFACT_PATH: ${{ inputs.nexus_artifact_path }}
+          BASE_URL: ${{ inputs.nexus_artifact_base_url }}
+          REPO: ${{ inputs.nexus_artifact_repo }}
         run: |
           echo "📥 Downloading artifact for Docker context..."
           
           # Extract filename from path
-          ARTIFACT_NAME=$(basename "${{ inputs.nexus_artifact_path }}")
+          ARTIFACT_NAME=$(basename "$ARTIFACT_PATH")
           echo "artifact_name=$ARTIFACT_NAME" >> $GITHUB_OUTPUT
           
-          echo "Source: ${{ inputs.nexus_artifact_base_url }}/repository/${{ inputs.nexus_artifact_repo }}/${{ inputs.nexus_artifact_path }}"
+          FULL_URL="${BASE_URL}/repository/${REPO}/${ARTIFACT_PATH}"
+          echo "Source: $FULL_URL"
           echo "Target: ./$ARTIFACT_NAME"
           
           # Use curl to download
           HTTP_STATUS=$(curl -f -s \
-            -u '${{ secrets.NEXUS_USERNAME }}:${{ secrets.NEXUS_PASSWORD }}' \
+            -u "$NEXUS_USER:$NEXUS_PASS" \
             -o "./$ARTIFACT_NAME" \
             -w "%{http_code}" \
-            "${{ inputs.nexus_artifact_base_url }}/repository/${{ inputs.nexus_artifact_repo }}/${{ inputs.nexus_artifact_path }}" 2>&1) || HTTP_STATUS="FAILED"
+            "$FULL_URL" 2>&1) || HTTP_STATUS="FAILED"
           
           if [[ "$HTTP_STATUS" == "200" && -f "./$ARTIFACT_NAME" ]]; then
             echo "✅ Artifact downloaded successfully."
@@ -221,42 +228,51 @@ jobs:
       # INPUT VALIDATION
       # ------------------------------------------------------------------------
       - name: Validate Inputs
+        env:
+          REGISTRY_TYPE: ${{ inputs.registry_type }}
+          ROLE_ARN: ${{ inputs.role_to_assume }}
+          REGISTRY_URL: ${{ inputs.registry_url }}
+          REG_USER: ${{ secrets.registry_username }}
+          REG_PASS: ${{ secrets.registry_password }}
+          NEXUS_URL: ${{ inputs.nexus_url }}
+          NEXUS_USER: ${{ secrets.NEXUS_USERNAME }}
+          NEXUS_PASS: ${{ secrets.NEXUS_PASSWORD }}
         run: |
           # Validate ECR mode requirements
-          if [[ "${{ inputs.registry_type }}" == "ecr" ]]; then
-            if [[ -z "${{ inputs.role_to_assume }}" ]]; then
+          if [[ "$REGISTRY_TYPE" == "ecr" ]]; then
+            if [[ -z "$ROLE_ARN" ]]; then
               echo "::error::ERROR: 'role_to_assume' is required when registry_type is 'ecr'"
               exit 1
             fi
           fi
           
           # Validate Generic mode requirements
-          if [[ "${{ inputs.registry_type }}" == "generic" ]]; then
-            if [[ -z "${{ inputs.registry_url }}" ]]; then
+          if [[ "$REGISTRY_TYPE" == "generic" ]]; then
+            if [[ -z "$REGISTRY_URL" ]]; then
               echo "::error::ERROR: 'registry_url' is required when registry_type is 'generic'"
               exit 1
             fi
-            if [[ -z "${{ secrets.registry_username }}" ]] || [[ -z "${{ secrets.registry_password }}" ]]; then
+            if [[ -z "$REG_USER" ]] || [[ -z "$REG_PASS" ]]; then
               echo "::error::ERROR: 'registry_username' and 'registry_password' secrets are required for generic mode"
               exit 1
             fi
           fi
           
           # Validate Nexus mode requirements
-          if [[ "${{ inputs.registry_type }}" == "nexus" ]]; then
-            if [[ -z "${{ inputs.nexus_url }}" ]]; then
+          if [[ "$REGISTRY_TYPE" == "nexus" ]]; then
+            if [[ -z "$NEXUS_URL" ]]; then
               echo "::error::ERROR: 'nexus_url' is required when registry_type is 'nexus'"
               exit 1
             fi
-            if [[ -z "${{ secrets.NEXUS_USERNAME }}" ]] || [[ -z "${{ secrets.NEXUS_PASSWORD }}" ]]; then
+            if [[ -z "$NEXUS_USER" ]] || [[ -z "$NEXUS_PASS" ]]; then
               echo "::error::ERROR: NEXUS_USERNAME and NEXUS_PASSWORD secrets are required for nexus mode"
               exit 1
             fi
           fi
           
           # Validate registry_type value
-          if [[ "${{ inputs.registry_type }}" != "ecr" ]] && [[ "${{ inputs.registry_type }}" != "generic" ]] && [[ "${{ inputs.registry_type }}" != "nexus" ]]; then
-            echo "::error::ERROR: registry_type must be 'ecr', 'generic', or 'nexus', got: '${{ inputs.registry_type }}'"
+          if [[ "$REGISTRY_TYPE" != "ecr" ]] && [[ "$REGISTRY_TYPE" != "generic" ]] && [[ "$REGISTRY_TYPE" != "nexus" ]]; then
+            echo "::error::ERROR: registry_type must be 'ecr', 'generic', or 'nexus', got: '$REGISTRY_TYPE'"
             exit 1
           fi
           
@@ -309,29 +325,37 @@ jobs:
 
       - name: Calculate Metadata
         id: meta
+        env:
+          IMAGE_TAG: ${{ inputs.image_tag }}
+          REGISTRY_TYPE: ${{ inputs.registry_type }}
+          NEXUS_URL: ${{ inputs.nexus_url }}
+          NEXUS_DOCKER_REPO: ${{ inputs.nexus_docker_repo }}
+          IMAGE_NAME: ${{ inputs.image_name }}
+          ECR_REGISTRY: ${{ steps.login-ecr.outputs.registry }}
+          GENERIC_REGISTRY: ${{ inputs.registry_url }}
         run: |
           # 1. Determine Tag
-          if [[ -n "${{ inputs.image_tag }}" ]]; then
-            TAG="${{ inputs.image_tag }}"
+          if [[ -n "$IMAGE_TAG" ]]; then
+            TAG="$IMAGE_TAG"
           else
             TAG=$(git rev-parse --short HEAD)
           fi
           
           # 2. Determine Registry Base URL and construct Full URI
-          if [[ "${{ inputs.registry_type }}" == "nexus" ]]; then
-            REGISTRY="${{ inputs.nexus_url }}"
-            FULL_URI="${REGISTRY}/${{ inputs.nexus_docker_repo }}/${{ inputs.image_name }}:$TAG"
-          elif [[ "${{ inputs.registry_type }}" == "ecr" ]]; then
-            REGISTRY="${{ steps.login-ecr.outputs.registry }}"
-            FULL_URI="$REGISTRY/${{ inputs.image_name }}:$TAG"
+          if [[ "$REGISTRY_TYPE" == "nexus" ]]; then
+            REGISTRY="$NEXUS_URL"
+            FULL_URI="${REGISTRY}/${NEXUS_DOCKER_REPO}/${IMAGE_NAME}:$TAG"
+          elif [[ "$REGISTRY_TYPE" == "ecr" ]]; then
+            REGISTRY="$ECR_REGISTRY"
+            FULL_URI="$REGISTRY/${IMAGE_NAME}:$TAG"
           else
-            REGISTRY="${{ inputs.registry_url }}"
+            REGISTRY="$GENERIC_REGISTRY"
             if [[ -z "$REGISTRY" ]]; then
-              FULL_URI="docker.io/${{ inputs.image_name }}:$TAG"
+              FULL_URI="docker.io/${IMAGE_NAME}:$TAG"
             elif [[ "$REGISTRY" == "docker.io" ]]; then
-              FULL_URI="docker.io/${{ inputs.image_name }}:$TAG"
+              FULL_URI="docker.io/${IMAGE_NAME}:$TAG"
             else
-              FULL_URI="$REGISTRY/${{ inputs.image_name }}:$TAG"
+              FULL_URI="$REGISTRY/${IMAGE_NAME}:$TAG"
             fi
           fi
           
