@@ -191,20 +191,27 @@ jobs:
       # ------------------------------------------------------------------------
       - name: Download Artifact from Nexus
         if: inputs.registry_type == 'nexus' && inputs.nexus_artifact_path != ''
+        id: download
         run: |
           echo "📥 Downloading artifact for Docker context..."
+          
+          # Extract filename from path
+          ARTIFACT_NAME=$(basename "${{ inputs.nexus_artifact_path }}")
+          echo "artifact_name=$ARTIFACT_NAME" >> $GITHUB_OUTPUT
+          
           echo "Source: ${{ inputs.nexus_artifact_base_url }}/repository/${{ inputs.nexus_artifact_repo }}/${{ inputs.nexus_artifact_path }}"
+          echo "Target: ./$ARTIFACT_NAME"
           
           # Use curl to download
           HTTP_STATUS=$(curl -f -s \
             -u '${{ secrets.NEXUS_USERNAME }}:${{ secrets.NEXUS_PASSWORD }}' \
-            -o "./app.jar" \
+            -o "./$ARTIFACT_NAME" \
             -w "%{http_code}" \
             "${{ inputs.nexus_artifact_base_url }}/repository/${{ inputs.nexus_artifact_repo }}/${{ inputs.nexus_artifact_path }}" 2>&1) || HTTP_STATUS="FAILED"
           
-          if [[ "$HTTP_STATUS" == "200" && -f "./app.jar" ]]; then
-            echo "✅ app.jar downloaded successfully."
-            ls -lh ./app.jar
+          if [[ "$HTTP_STATUS" == "200" && -f "./$ARTIFACT_NAME" ]]; then
+            echo "✅ Artifact downloaded successfully."
+            ls -lh "./$ARTIFACT_NAME"
           else
             echo "::error::Failed to download artifact from Nexus (HTTP $HTTP_STATUS)"
             exit 1
@@ -360,7 +367,9 @@ jobs:
           push: true
           tags: ${{ steps.meta.outputs.full_uri }}
           platforms: ${{ inputs.platforms }}
-          build-args: ${{ steps.build_args.outputs.combined_args }}
+          build-args: |
+            ${{ steps.build_args.outputs.combined_args }}
+            ARTIFACT_NAME=${{ steps.download.outputs.artifact_name }}
           # Standard GHA Caching
           cache-from: type=gha
           cache-to: type=gha,mode=max
