@@ -63,6 +63,16 @@ on:
         description: "Nexus Docker repository name (e.g., docker-hosted)"
         type: string
         default: "docker-hosted"
+      
+      # --- NEXUS ARTIFACT DOWNLOAD (Optimization) ---
+      nexus_artifact_repo:
+        description: "Nexus Maven repository name (e.g., maven-releases) for artifact download"
+        type: string
+        default: "maven-releases"
+      nexus_artifact_path:
+        description: "Path to the artifact in Nexus (e.g., com/org/app/1.0.0/app.jar)"
+        type: string
+        default: ""
 
       # --- BUILD OPTIONS ---
       build_args:
@@ -171,6 +181,30 @@ jobs:
     steps:
       - name: Checkout Code
         uses: actions/checkout@v4.1.1
+
+      # ------------------------------------------------------------------------
+      # DIRECT ARTIFACT DOWNLOAD (Optimized Flow)
+      # ------------------------------------------------------------------------
+      - name: Download Artifact from Nexus
+        if: inputs.registry_type == 'nexus' && inputs.nexus_artifact_path != ''
+        run: |
+          echo "📥 Downloading artifact for Docker context..."
+          echo "Source: ${{ inputs.nexus_url }}/repository/${{ inputs.nexus_artifact_repo }}/${{ inputs.nexus_artifact_path }}"
+          
+          # Use curl to download
+          HTTP_STATUS=$(curl -f -s \
+            -u '${{ secrets.NEXUS_USERNAME }}:${{ secrets.NEXUS_PASSWORD }}' \
+            -o "./app.jar" \
+            -w "%{http_code}" \
+            "${{ inputs.nexus_url }}/repository/${{ inputs.nexus_artifact_repo }}/${{ inputs.nexus_artifact_path }}" 2>&1) || HTTP_STATUS="FAILED"
+          
+          if [[ "$HTTP_STATUS" == "200" && -f "./app.jar" ]]; then
+            echo "✅ app.jar downloaded successfully."
+            ls -lh ./app.jar
+          else
+            echo "::error::Failed to download artifact from Nexus (HTTP $HTTP_STATUS)"
+            exit 1
+          fi
 
       # ------------------------------------------------------------------------
       # INPUT VALIDATION

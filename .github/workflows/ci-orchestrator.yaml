@@ -261,36 +261,13 @@ jobs:
       nexus_repository: ${{ fromJson(needs.load-config.outputs.config).nexus.repository || 'maven-releases' }}
 
   # ---------------------------------------------------------------------------
-  # 4. NEXUS DOWNLOAD (For Docker Build Context) - CONDITIONAL
-  # Only runs if Docker is enabled and needs artifacts from Nexus
-  # ---------------------------------------------------------------------------
-  nexus-download:
-    needs: [load-config, build-node, build-python, build-maven]
-    if: |
-      always() &&
-      fromJson(needs.load-config.outputs.config).docker.enabled == true &&
-      fromJson(needs.load-config.outputs.config).nexus.download_for_docker == true &&
-      !contains(needs.*.result, 'failure') &&
-      !contains(needs.*.result, 'cancelled')
-    uses: ./.github/workflows/nexus-download.yaml
-    secrets:
-      NEXUS_USERNAME: ${{ secrets.NEXUS_USERNAME }}
-      NEXUS_PASSWORD: ${{ secrets.NEXUS_PASSWORD }}
-    with:
-      nexus_url: ${{ fromJson(needs.load-config.outputs.config).nexus.url }}
-      artifacts: ${{ fromJson(needs.load-config.outputs.config).nexus.docker_artifacts || '[]' }}
-      download_path: ${{ fromJson(needs.load-config.outputs.config).nexus.download_path || './artifacts' }}
-      verify_checksums: ${{ fromJson(needs.load-config.outputs.config).nexus.verify_checksums != false }}
-
-  # ---------------------------------------------------------------------------
   # 5. DOCKER BUILD (Conditional)
   # ---------------------------------------------------------------------------
   docker:
-    needs: [load-config, build-node, build-python, build-maven, nexus-download]
+    needs: [load-config, build-node, build-python, build-maven]
     if: |
       always() && 
       fromJson(needs.load-config.outputs.config).docker.enabled == true &&
-      (needs.nexus-download.result == 'success' || needs.nexus-download.result == 'skipped') &&
       !contains(needs.*.result, 'failure') && 
       !contains(needs.*.result, 'cancelled')
     
@@ -314,6 +291,9 @@ jobs:
       # Nexus Docker registry
       nexus_url: ${{ fromJson(needs.load-config.outputs.config).nexus.docker_registry_url || '' }}
       nexus_docker_repo: ${{ fromJson(needs.load-config.outputs.config).nexus.docker_repository || 'docker-hosted' }}
+      # Nexus Artifact Download (Optimization)
+      nexus_artifact_repo: ${{ fromJson(needs.load-config.outputs.config).nexus.repository || 'maven-releases' }}
+      nexus_artifact_path: ${{ needs.build-maven.outputs.nexus_path || '' }}
       # Build configuration
       build_args: ${{ fromJson(needs.load-config.outputs.config).docker.build_args || '' }}
       platforms: ${{ fromJson(needs.load-config.outputs.config).docker.platforms || 'linux/amd64' }}
@@ -381,7 +361,7 @@ jobs:
   # ---------------------------------------------------------------------------
   summary:
     if: always()
-    needs: [load-config, sast-semgrep, sast-sonarqube, iac, build-node, build-python, build-maven, nexus-download, docker, trivy, sbom, sbom-scan]
+    needs: [load-config, sast-semgrep, sast-sonarqube, iac, build-node, build-python, build-maven, docker, trivy, sbom, sbom-scan]
     runs-on: ubuntu-latest
     timeout-minutes: 2
     
@@ -414,7 +394,7 @@ jobs:
           echo "| ├─ Python Build | ${{ needs.build-python.result }} |" >> $GITHUB_STEP_SUMMARY
           echo "| └─ Maven Build | ${{ needs.build-maven.result }} |" >> $GITHUB_STEP_SUMMARY
           echo "| **Artifact Management** | |" >> $GITHUB_STEP_SUMMARY
-          echo "| └─ Nexus Download | ${{ needs.nexus-download.result }} |" >> $GITHUB_STEP_SUMMARY
+          
           echo "| **Container** | |" >> $GITHUB_STEP_SUMMARY
           echo "| └─ Docker Build | ${{ needs.docker.result }} |" >> $GITHUB_STEP_SUMMARY
           echo "| **Post-Build Security (Sequential)** | |" >> $GITHUB_STEP_SUMMARY
