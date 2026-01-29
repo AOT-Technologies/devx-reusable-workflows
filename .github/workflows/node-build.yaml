@@ -45,11 +45,15 @@ on:
         type: string
         required: true
       nexus_repository:
-        description: "Target repository (e.g., raw-releases)"
+        description: "Target repository (e.g., raw-releases or npm-hosted)"
         type: string
         default: "raw-releases"
+      nexus_repo_type:
+        description: "Type of Nexus repository: 'raw' or 'npm'"
+        type: string
+        default: "raw"
       nexus_path:
-        description: "Custom upload path in Nexus (e.g., @org/package/1.0.0/package.tgz)"
+        description: "Custom upload path in Nexus (Required for 'raw' mode)"
         type: string
         default: ""
 
@@ -101,6 +105,18 @@ on:
         description: "Artifact path"
         type: string
         default: ""
+      nexus_url:
+        description: "Nexus URL"
+        type: string
+        default: ""
+      nexus_repository:
+        description: "Nexus Repository"
+        type: string
+        default: "raw-releases"
+      nexus_repo_type:
+        description: "Nexus Repo Type (raw/npm)"
+        type: string
+        default: "raw"
       upload_to_nexus:
         description: "Upload to Nexus"
         type: boolean
@@ -193,57 +209,79 @@ jobs:
 
       # --- UPLOAD TO NEXUS ---
       - name: Upload to Nexus
-        if: inputs.artifact_path != '' && inputs.nexus_url != ''
+        if: inputs.nexus_url != ''
         id: upload_nexus
         run: |
-          ARTIFACT_FILE="${{ steps.detect_artifact.outputs.fullpath }}"
-          
-          # Determine upload path
-          if [[ -n "${{ inputs.nexus_path }}" ]]; then
-            UPLOAD_PATH="${{ inputs.nexus_path }}"
-          else
-            # Default: use filename in generic path
-            UPLOAD_PATH="generic/${{ steps.detect_artifact.outputs.filename }}"
-          fi
-          
-          FULL_URL="${{ inputs.nexus_url }}/repository/${{ inputs.nexus_repository }}/${UPLOAD_PATH}"
-          
-          echo "📤 Uploading to Nexus..."
-          echo "File: $ARTIFACT_FILE"
-          echo "URL: $FULL_URL"
-          
-          # Verify file exists
-          if [[ ! -f "$ARTIFACT_FILE" ]]; then
-            echo "::error::Build artifact not found: $ARTIFACT_FILE"
-            exit 1
-          fi
-          
-          # Upload to Nexus
-          HTTP_STATUS=$(curl -s \
-            -u '${{ secrets.NEXUS_USERNAME }}:${{ secrets.NEXUS_PASSWORD }}' \
-            -X PUT \
-            -T "$ARTIFACT_FILE" \
-            -w "%{http_code}" \
-            -o response.txt \
-            "$FULL_URL")
-          
-          if [[ "$HTTP_STATUS" -eq 200 || "$HTTP_STATUS" -eq 201 ]]; then
-            echo "✅ Upload successful!"
-            echo "path=$UPLOAD_PATH" >> $GITHUB_OUTPUT
-            echo "url=$FULL_URL" >> $GITHUB_OUTPUT
+          if [[ "${{ inputs.nexus_repo_type }}" == "npm" ]]; then
+            echo "📤 Publishing to native NPM repository..."
             
-            # Verify upload
-            VERIFY_STATUS=$(curl -s -o /dev/null -w "%{http_code}" \
+            # Remove trailing slash from URL if present
+            CLEAN_URL=$(echo "${{ inputs.nexus_url }}" | sed 's:/*$::')
+            REGISTRY_URL="${CLEAN_URL}/repository/${{ inputs.nexus_repository }}/"
+            
+            # Configure npm for Nexus
+            npm config set registry "$REGISTRY_URL"
+            
+            # Create base64 auth
+            AUTH=$(echo -n "${{ secrets.NEXUS_USERNAME }}:${{ secrets.NEXUS_PASSWORD }}" | base64)
+            npm config set _auth "$AUTH"
+            npm config set always-auth true
+            
+            # Publish
+            npm publish --registry "$REGISTRY_URL"
+            
+            # Construct the download path for docker-build.yaml
+            # Nexus NPM path: [package-name]/-/[package-name-without-scope]-[version].tgz
+            PKG_NAME=$(node -p "require('./package.json').name")
+            PKG_VERSION=$(node -p "require('./package.json').version")
+            
+            # Get the filename that npm pack would generate
+            FILENAME=$(npm pack --dry-run | tail -n 1)
+            
+            echo "path=${PKG_NAME}/-/${FILENAME}" >> $GITHUB_OUTPUT
+            echo "filename=${FILENAME}" >> $GITHUB_OUTPUT
+            echo "✅ Published successfully to NPM registry"
+            echo "Download Path: ${PKG_NAME}/-/${FILENAME}"
+            
+          else
+            echo "📤 Uploading to RAW repository..."
+            ARTIFACT_FILE="${{ steps.detect_artifact.outputs.fullpath }}"
+            
+            # Determine upload path
+            if [[ -n "${{ inputs.nexus_path }}" ]]; then
+              UPLOAD_PATH="${{ inputs.nexus_path }}"
+            else
+              # Default: use filename in generic path
+              UPLOAD_PATH="generic/${{ steps.detect_artifact.outputs.filename }}"
+            fi
+            
+            FULL_URL="${{ inputs.nexus_url }}/repository/${{ inputs.nexus_repository }}/${UPLOAD_PATH}"
+            
+            echo "File: $ARTIFACT_FILE"
+            echo "URL: $FULL_URL"
+            
+            # Verify file exists
+            if [[ ! -f "$ARTIFACT_FILE" ]]; then
+              echo "::error::Build artifact not found: $ARTIFACT_FILE"
+              exit 1
+            fi
+            
+            # Upload to Nexus
+            HTTP_STATUS=$(curl -s \
               -u '${{ secrets.NEXUS_USERNAME }}:${{ secrets.NEXUS_PASSWORD }}' \
+              -X PUT \
+              -T "$ARTIFACT_FILE" \
+              -w "%{http_code}" \
+              -o response.txt \
               "$FULL_URL")
             
-            if [[ "$VERIFY_STATUS" -eq 200 ]]; then
-              echo "✅ Artifact verified in Nexus"
+            if [[ "$HTTP_STATUS" -eq 200 || "$HTTP_STATUS" -eq 201 ]]; then
+              echo "✅ Upload successful!"
+              echo "path=$UPLOAD_PATH" >> $GITHUB_OUTPUT
+              echo "url=$FULL_URL" >> $GITHUB_OUTPUT
             else
-              echo "::warning::Could not verify artifact (HTTP $VERIFY_STATUS)"
+              echo "::error::Upload failed with status $HTTP_STATUS"
+              cat response.txt
+              exit 1
             fi
-          else
-            echo "::error::Upload failed with status $HTTP_STATUS"
-            cat response.txt
-            exit 1
           fi
