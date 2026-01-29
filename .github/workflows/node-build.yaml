@@ -216,12 +216,12 @@ jobs:
             echo "📤 Publishing to native NPM repository..."
             
             # Remove trailing slash from URL if present
-            CLEAN_URL=$(echo "${{ inputs.nexus_url }}" | sed 's:/*$::')
+            CLEAN_URL=$(echo "${{ inputs.nexus_url }}" | sed 's|/*$||')
             REGISTRY_URL="${CLEAN_URL}/repository/${{ inputs.nexus_repository }}/"
             
             # Configure npm for Nexus using .npmrc for better scoped auth support
-            # Remove protocol (http/https) for the auth key
-            AUTH_KEY=$(echo "$REGISTRY_URL" | sed 's:^https\?:::')
+            # Remove protocol (http/https) for the auth key to leave the // prefix
+            AUTH_KEY=$(echo "$REGISTRY_URL" | sed 's|^https:||' | sed 's|^http:||')
             
             # Create base64 auth
             AUTH=$(echo -n "${{ secrets.NEXUS_USERNAME }}:${{ secrets.NEXUS_PASSWORD }}" | base64)
