@@ -223,12 +223,16 @@ jobs:
             # Remove protocol (http/https) for the auth key to leave the // prefix
             AUTH_KEY=$(echo "$REGISTRY_URL" | sed 's|^https:||' | sed 's|^http:||')
             
-            # Create base64 auth
-            AUTH=$(echo -n "${{ secrets.NEXUS_USERNAME }}:${{ secrets.NEXUS_PASSWORD }}" | base64)
+            # Create base64 auth (using printf and base64 -w 0 for robustness)
+            AUTH=$(printf "%s:%s" "${{ secrets.NEXUS_USERNAME }}" "${{ secrets.NEXUS_PASSWORD }}" | base64 -w 0)
             
             echo "registry=$REGISTRY_URL" > .npmrc
             echo "${AUTH_KEY}:_auth=$AUTH" >> .npmrc
             echo "${AUTH_KEY}:always-auth=true" >> .npmrc
+            echo "email=ci@example.com" >> .npmrc
+            
+            echo "--- .npmrc structure (masked) ---"
+            sed 's/:_auth=.*/:_auth=****/' .npmrc
             
             # Publish
             npm publish
