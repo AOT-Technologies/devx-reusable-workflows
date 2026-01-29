@@ -65,6 +65,10 @@ on:
         default: "docker-hosted"
       
       # --- NEXUS ARTIFACT DOWNLOAD (Optimization) ---
+      nexus_artifact_base_url:
+        description: "Base URL for Nexus artifact download (e.g. https://nexus.example.com)"
+        type: string
+        default: ""
       nexus_artifact_repo:
         description: "Nexus Maven repository name (e.g., maven-releases) for artifact download"
         type: string
@@ -189,14 +193,14 @@ jobs:
         if: inputs.registry_type == 'nexus' && inputs.nexus_artifact_path != ''
         run: |
           echo "📥 Downloading artifact for Docker context..."
-          echo "Source: ${{ inputs.nexus_url }}/repository/${{ inputs.nexus_artifact_repo }}/${{ inputs.nexus_artifact_path }}"
+          echo "Source: ${{ inputs.nexus_artifact_base_url }}/repository/${{ inputs.nexus_artifact_repo }}/${{ inputs.nexus_artifact_path }}"
           
           # Use curl to download
           HTTP_STATUS=$(curl -f -s \
             -u '${{ secrets.NEXUS_USERNAME }}:${{ secrets.NEXUS_PASSWORD }}' \
             -o "./app.jar" \
             -w "%{http_code}" \
-            "${{ inputs.nexus_url }}/repository/${{ inputs.nexus_artifact_repo }}/${{ inputs.nexus_artifact_path }}" 2>&1) || HTTP_STATUS="FAILED"
+            "${{ inputs.nexus_artifact_base_url }}/repository/${{ inputs.nexus_artifact_repo }}/${{ inputs.nexus_artifact_path }}" 2>&1) || HTTP_STATUS="FAILED"
           
           if [[ "$HTTP_STATUS" == "200" && -f "./app.jar" ]]; then
             echo "✅ app.jar downloaded successfully."
