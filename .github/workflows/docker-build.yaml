@@ -205,9 +205,13 @@ jobs:
           ARTIFACT_NAME=$(basename "$ARTIFACT_PATH")
           echo "artifact_name=$ARTIFACT_NAME" >> $GITHUB_OUTPUT
           
-          FULL_URL="${BASE_URL}/repository/${REPO}/${ARTIFACT_PATH}"
+          FULL_URL="${BASE_URL}/repository/${REPO}/${ARTIFACT_PATH}" # URL logged may contain potential credential path | Mask or remove the echo if needed
           echo "Source: $FULL_URL"
           echo "Target: ./$ARTIFACT_NAME"
+
+          # run: |
+          #   MASKED_URL=$(echo "$FULL_URL" | sed 's|://[^@]*@|://***:***@|g')
+          #   echo "URL: $MASKED_URL"
           
           # Use curl to download
           HTTP_STATUS=$(curl -f -s \

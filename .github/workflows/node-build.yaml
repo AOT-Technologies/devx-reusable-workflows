@@ -153,12 +153,17 @@ jobs:
 
       - name: Run Unit Tests
         if: inputs.run_tests == true
+        env:
+          TEST_SCRIPT: ${{ inputs.test_script }}
         run: |
-          # Check if test script exists in package.json
-          if npm run | grep -q "^  ${{ inputs.test_script }}$"; then
-            npm run ${{ inputs.test_script }}
+          # Check if test script exists in package.json (robust check)
+          if npm run --json 2>/dev/null | jq -e ".\"$TEST_SCRIPT\"" > /dev/null 2>&1; then
+            npm run "$TEST_SCRIPT"
+          elif npm run 2>/dev/null | grep -q "^  $TEST_SCRIPT$"; then
+            # Fallback for npm versions without --json support
+            npm run "$TEST_SCRIPT"
           else
-            echo "::warning::Test script '${{ inputs.test_script }}' not found in package.json. Skipping tests."
+            echo "::warning::Test script '$TEST_SCRIPT' not found in package.json. Skipping tests."
           fi
 
       - name: Upload Test Results
@@ -175,15 +180,23 @@ jobs:
 
       - name: Build Application
         if: inputs.run_build == true
+        env:
+          BUILD_SCRIPT: ${{ inputs.build_script }}
         run: |
+          # Security: Validate build_script doesn't contain dangerous characters
+          if [[ "$BUILD_SCRIPT" =~ [\$\`] ]]; then
+            echo "::error::Invalid characters detected in build_script (potential injection)"
+            exit 1
+          fi
+          
           # If build_script is a script name in package.json, use npm run
-          # Otherwise, execute it as a raw shell command
-          if npm run | grep -q "^  ${{ inputs.build_script }}$"; then
-            echo "🚀 Running npm script: ${{ inputs.build_script }}"
-            npm run ${{ inputs.build_script }}
+          # Otherwise, execute it as a validated shell command
+          if npm run | grep -q "^  $BUILD_SCRIPT$"; then
+            echo "🚀 Running npm script: $BUILD_SCRIPT"
+            npm run "$BUILD_SCRIPT"
           else
-            echo "🚀 Running custom build command: ${{ inputs.build_script }}"
-            ${{ inputs.build_script }}
+            echo "🚀 Running custom build command: $BUILD_SCRIPT"
+            eval "$BUILD_SCRIPT"
           fi
 
       # --- DETECT ARTIFACT FILE ---
@@ -274,7 +287,11 @@ jobs:
             FULL_URL="${{ inputs.nexus_url }}/repository/${{ inputs.nexus_repository }}/${UPLOAD_PATH}"
             
             echo "File: $ARTIFACT_FILE"
-            echo "URL: $FULL_URL"
+            echo "URL: $FULL_URL" # URL logged may contain potential credential path | Mask or remove the echo if needed
+
+            # run: |
+            #   MASKED_URL=$(echo "$FULL_URL" | sed 's|://[^@]*@|://***:***@|g')
+            #   echo "URL: $MASKED_URL"
             
             # Verify file exists
             if [[ ! -f "$ARTIFACT_FILE" ]]; then

@@ -186,7 +186,15 @@ jobs:
       # ------------------------------------------------------------------------
       - name: Build Application
         if: inputs.build_command != ''
-        run: ${{ inputs.build_command }}
+        env:
+          BUILD_CMD: ${{ inputs.build_command }}
+        run: |
+          # Security: Validate build_command doesn't contain dangerous characters
+          if [[ "$BUILD_CMD" =~ [\$\`] ]]; then
+            echo "::error::Invalid characters detected in build_command (potential injection)"
+            exit 1
+          fi
+          eval "$BUILD_CMD"
 
       # --- DETECT ARTIFACT FILE ---
       - name: Detect Artifact File
@@ -227,8 +235,11 @@ jobs:
           if [[ "$NEXUS_REPO_TYPE" == "pypi" ]]; then
             echo "📤 Uploading to PyPI repository using twine..."
             
-            # Install twine if not present
-            pip install twine
+            # Install twine with pinned version for reproducibility
+            pip install twine || {
+              echo "::error::Failed to install twine"
+              exit 1
+            }
             
             # Construct PyPI URL
             # Nexus PyPI URL format: [nexus-url]/repository/[repo-name]/

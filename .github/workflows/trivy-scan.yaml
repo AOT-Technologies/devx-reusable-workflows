@@ -172,7 +172,7 @@ jobs:
       # Option A: AWS ECR (OIDC)
       - name: Configure AWS Credentials (ECR)
         if: inputs.registry_type == 'ecr' && inputs.role_to_assume != ''
-        uses: aws-actions/configure-aws-credentials@v4
+        uses: aws-actions/configure-aws-credentials@v4.0.2
         with:
           role-to-assume: ${{ inputs.role_to_assume }}
           aws-region: ${{ inputs.aws_region }}

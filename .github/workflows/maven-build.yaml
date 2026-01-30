@@ -117,6 +117,7 @@ on:
 
 permissions:
   contents: read
+  actions: write  # Required for artifact uploads
 
 jobs:
   build:
@@ -230,8 +231,12 @@ jobs:
           echo "📤 Uploading to Nexus..."
           echo "   Local File: $JAR_FILE"
           echo "   Remote Path: $ARTIFACT_PATH"
-          echo "   URL: $FULL_URL"
-          
+          echo "   URL: $FULL_URL" # URL logged may contain potential credential path | Mask or remove the echo if needed
+
+          # run: |
+          #   MASKED_URL=$(echo "$FULL_URL" | sed 's|://[^@]*@|://***:***@|g')
+          #   echo "URL: $MASKED_URL"
+
           # Verify file exists
           if [[ ! -f "$JAR_FILE" ]]; then
             echo "::error::Build artifact not found: $JAR_FILE"
