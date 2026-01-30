@@ -1,0 +1,208 @@
+name: "Module: Google Chat Notification"
+
+# ------------------------------------------------------------------------------
+# Sends deployment notifications to Google Chat via webhook.
+# Supports: starting, success, failure, rollback statuses.
+# ------------------------------------------------------------------------------
+
+on:
+  workflow_call:
+    inputs:
+      status:
+        description: "Deployment status: starting, success, failure, rollback"
+        type: string
+        required: true
+      environment:
+        description: "Target environment"
+        type: string
+        required: true
+      image_uri:
+        description: "Docker image URI"
+        type: string
+        default: ""
+      message:
+        description: "Custom message (optional)"
+        type: string
+        default: ""
+      
+    secrets:
+      GOOGLE_CHAT_WEBHOOK:
+        description: "Google Chat webhook URL"
+        required: true
+
+  workflow_dispatch:
+    inputs:
+      status:
+        description: "Status"
+        type: choice
+        options:
+          - starting
+          - success
+          - failure
+          - rollback
+        required: true
+      environment:
+        description: "Environment"
+        type: string
+        required: true
+      message:
+        description: "Custom message"
+        type: string
+        default: ""
+
+permissions:
+  contents: read
+
+jobs:
+  notify:
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+
+    steps:
+      - name: Validate Webhook
+        env:
+          WEBHOOK_URL: ${{ secrets.GOOGLE_CHAT_WEBHOOK }}
+        run: |
+          if [[ -z "$WEBHOOK_URL" ]]; then
+            echo "::warning::GOOGLE_CHAT_WEBHOOK secret not configured. Skipping notification."
+            exit 0
+          fi
+
+      - name: Prepare Notification
+        id: prepare
+        run: |
+          STATUS="${{ inputs.status }}"
+          ENV="${{ inputs.environment }}"
+          IMAGE="${{ inputs.image_uri }}"
+          CUSTOM_MSG="${{ inputs.message }}"
+          REPO="${{ github.repository }}"
+          RUN_URL="${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}"
+          COMMIT="${{ github.sha }}"
+          SHORT_SHA="${COMMIT:0:7}"
+          ACTOR="${{ github.actor }}"
+          
+          # Determine emoji and color based on status
+          case "$STATUS" in
+            starting)
+              EMOJI="🚀"
+              TITLE="Deployment Starting"
+              COLOR="#2196F3"  # Blue
+              ;;
+            success)
+              EMOJI="✅"
+              TITLE="Deployment Successful"
+              COLOR="#4CAF50"  # Green
+              ;;
+            failure)
+              EMOJI="❌"
+              TITLE="Deployment Failed"
+              COLOR="#F44336"  # Red
+              ;;
+            rollback)
+              EMOJI="⚠️"
+              TITLE="Rollback Triggered"
+              COLOR="#FF9800"  # Orange
+              ;;
+            *)
+              EMOJI="📋"
+              TITLE="Deployment Update"
+              COLOR="#9E9E9E"  # Grey
+              ;;
+          esac
+          
+          # Build message body
+          if [[ -n "$CUSTOM_MSG" ]]; then
+            BODY="$CUSTOM_MSG"
+          else
+            BODY="$TITLE for $ENV"
+          fi
+          
+          # Store for next step
+          echo "emoji=$EMOJI" >> $GITHUB_OUTPUT
+          echo "title=$TITLE" >> $GITHUB_OUTPUT
+          echo "body=$BODY" >> $GITHUB_OUTPUT
+          echo "color=$COLOR" >> $GITHUB_OUTPUT
+          echo "run_url=$RUN_URL" >> $GITHUB_OUTPUT
+          echo "short_sha=$SHORT_SHA" >> $GITHUB_OUTPUT
+
+      - name: Send Google Chat Notification
+        env:
+          WEBHOOK_URL: ${{ secrets.GOOGLE_CHAT_WEBHOOK }}
+          STATUS_EMOJI: ${{ steps.prepare.outputs.emoji }}
+          STATUS_TITLE: ${{ steps.prepare.outputs.title }}
+          REPO_NAME: ${{ github.repository }}
+          ENV_NAME: ${{ inputs.environment }}
+          IMAGE_URI: ${{ inputs.image_uri }}
+          SHORT_SHA: ${{ steps.prepare.outputs.short_sha }}
+          ACTOR_NAME: ${{ github.actor }}
+          RUN_URL: ${{ steps.prepare.outputs.run_url }}
+        run: |
+          # Build Google Chat card message using jq for safe JSON escaping
+          # This prevents JSON injection from user-controlled inputs
+          
+          CARD_JSON=$(jq -n \
+            --arg emoji "$STATUS_EMOJI" \
+            --arg title "$STATUS_TITLE" \
+            --arg repo "$REPO_NAME" \
+            --arg env "$ENV_NAME" \
+            --arg image "$IMAGE_URI" \
+            --arg commit "$SHORT_SHA" \
+            --arg actor "$ACTOR_NAME" \
+            --arg url "$RUN_URL" \
+            '{
+              cardsV2: [{
+                cardId: "deployment-notification",
+                card: {
+                  header: {
+                    title: "\($emoji) \($title)",
+                    subtitle: $repo
+                  },
+                  sections: [
+                    {
+                      header: "Deployment Details",
+                      widgets: [
+                        {decoratedText: {topLabel: "Environment", text: $env}},
+                        {decoratedText: {topLabel: "Image", text: $image}},
+                        {decoratedText: {topLabel: "Commit", text: $commit}},
+                        {decoratedText: {topLabel: "Triggered by", text: $actor}}
+                      ]
+                    }
+                    ,
+                    {
+                      widgets: [{
+                        buttonList: {
+                          buttons: [{
+                            text: "View Workflow Run",
+                            onClick: {openLink: {url: $url}}
+                          }]
+                        }
+                      }]
+                    }
+                  ]
+                }
+              }]
+            }')
+          
+          # Send to Google Chat
+          HTTP_STATUS=$(curl -s -o response.txt -w "%{http_code}" \
+            -X POST \
+            -H "Content-Type: application/json" \
+            -d "$CARD_JSON" \
+            "$WEBHOOK_URL")
+          
+          if [[ "$HTTP_STATUS" == "200" ]]; then
+            echo "Notification sent successfully"
+          else
+            echo "::warning::Failed to send notification (HTTP $HTTP_STATUS)"
+            cat response.txt
+          fi
+
+      - name: Generate Summary
+        run: |
+          echo "## Notification Sent" >> $GITHUB_STEP_SUMMARY
+          echo "" >> $GITHUB_STEP_SUMMARY
+          echo "| Property | Value |" >> $GITHUB_STEP_SUMMARY
+          echo "|----------|-------|" >> $GITHUB_STEP_SUMMARY
+          echo "| Channel | Google Chat |" >> $GITHUB_STEP_SUMMARY
+          echo "| Status | ${{ inputs.status }} |" >> $GITHUB_STEP_SUMMARY
+          echo "| Environment | ${{ inputs.environment }} |" >> $GITHUB_STEP_SUMMARY

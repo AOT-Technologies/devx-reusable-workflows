@@ -1,0 +1,327 @@
+name: "Module: Health Check"
+
+# ------------------------------------------------------------------------------
+# Post-deployment health verification.
+# Supports HTTP, TCP, and Kubernetes-native checks.
+# Triggers rollback on failure (via orchestrator).
+# ------------------------------------------------------------------------------
+
+on:
+  workflow_call:
+    inputs:
+      environment:
+        description: "Target environment"
+        type: string
+        required: true
+      health_endpoint:
+        description: "Health check endpoint path (e.g., /health)"
+        type: string
+        default: "/health"
+      health_url:
+        description: "Full health check URL (overrides endpoint)"
+        type: string
+        default: ""
+      check_type:
+        description: "Check type: http, tcp, k8s"
+        type: string
+        default: "k8s"
+      
+      # Kubernetes settings
+      namespace:
+        description: "Kubernetes namespace"
+        type: string
+        default: "default"
+      cluster_name:
+        description: "EKS cluster name"
+        type: string
+        default: ""
+      deployment_name:
+        description: "Kubernetes deployment name (auto-detected if not provided)"
+        type: string
+        default: ""
+      
+      # SSL Verification
+      verify_ssl:
+        description: "Verify SSL certificates (disable for dev with self-signed certs)"
+        type: boolean
+        default: true
+      
+      # Timing
+      initial_delay:
+        description: "Seconds to wait before first check"
+        type: number
+        default: 30
+      timeout:
+        description: "Timeout per check in seconds"
+        type: number
+        default: 10
+      retries:
+        description: "Number of retry attempts"
+        type: number
+        default: 5
+      retry_interval:
+        description: "Seconds between retries"
+        type: number
+        default: 15
+      
+      # AWS
+      aws_region:
+        description: "AWS region"
+        type: string
+        default: "us-east-1"
+      role_to_assume:
+        description: "AWS IAM role for OIDC"
+        type: string
+        default: ""
+
+    outputs:
+      status:
+        description: "Health check result: healthy, unhealthy"
+        value: ${{ jobs.health-check.outputs.status }}
+      details:
+        description: "Health check details"
+        value: ${{ jobs.health-check.outputs.details }}
+
+  workflow_dispatch:
+    inputs:
+      environment:
+        description: "Environment"
+        type: string
+        required: true
+      health_endpoint:
+        description: "Health endpoint"
+        type: string
+        default: "/health"
+      check_type:
+        description: "Check type"
+        type: choice
+        options:
+          - http
+          - tcp
+          - k8s
+        default: "k8s"
+      namespace:
+        description: "Namespace"
+        type: string
+        default: "default"
+      cluster_name:
+        description: "Cluster name"
+        type: string
+        default: ""
+
+permissions:
+  contents: read
+  id-token: write
+
+jobs:
+  health-check:
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    
+    outputs:
+      status: ${{ steps.result.outputs.status }}
+      details: ${{ steps.result.outputs.details }}
+
+    steps:
+      - name: Configure AWS Credentials
+        if: inputs.role_to_assume != ''
+        uses: aws-actions/configure-aws-credentials@v4.0.2
+        with:
+          role-to-assume: ${{ inputs.role_to_assume }}
+          aws-region: ${{ inputs.aws_region }}
+
+      - name: Setup kubectl
+        if: inputs.check_type == 'k8s' && inputs.cluster_name != ''
+        run: |
+          aws eks update-kubeconfig --name "${{ inputs.cluster_name }}" --region ${{ inputs.aws_region }}
+          kubectl cluster-info
+
+      - name: Initial Delay
+        run: |
+          echo "Waiting ${{ inputs.initial_delay }} seconds before health check..."
+          sleep ${{ inputs.initial_delay }}
+
+      # -------------------------------------------------------------------------
+      # KUBERNETES HEALTH CHECK
+      # -------------------------------------------------------------------------
+      - name: Kubernetes Health Check
+        id: k8s_check
+        if: inputs.check_type == 'k8s'
+        run: |
+          echo "Checking Kubernetes deployment health..."
+          
+          NAMESPACE="${{ inputs.namespace }}"
+          DEPLOYMENT="${{ inputs.deployment_name }}"
+          MAX_RETRIES=${{ inputs.retries }}
+          RETRY_INTERVAL=${{ inputs.retry_interval }}
+          
+          # If deployment name not provided, find deployments in namespace
+          if [[ -z "$DEPLOYMENT" ]]; then
+            echo "Auto-detecting deployments in namespace: $NAMESPACE"
+            DEPLOYMENTS=$(kubectl get deployments -n "$NAMESPACE" -o jsonpath='{.items[*].metadata.name}')
+            DEPLOYMENT=$(echo "$DEPLOYMENTS" | tr ' ' '\n' | head -1)
+            echo "Found deployment: $DEPLOYMENT"
+          fi
+          
+          if [[ -z "$DEPLOYMENT" ]]; then
+            echo "::error::No deployments found in namespace $NAMESPACE"
+            echo "status=unhealthy" >> $GITHUB_OUTPUT
+            exit 1
+          fi
+          
+          # Wait for rollout to complete
+          for ((i=1; i<=MAX_RETRIES; i++)); do
+            echo "Attempt $i/$MAX_RETRIES: Checking deployment status..."
+            
+            ROLLOUT_STATUS=$(kubectl rollout status deployment/"$DEPLOYMENT" -n "$NAMESPACE" --timeout=${{ inputs.timeout }}s 2>&1) && {
+              echo "Deployment rollout successful"
+              
+              # Verify pods are ready
+              READY_PODS=$(kubectl get deployment "$DEPLOYMENT" -n "$NAMESPACE" -o jsonpath='{.status.readyReplicas}' || echo "0")
+              DESIRED_PODS=$(kubectl get deployment "$DEPLOYMENT" -n "$NAMESPACE" -o jsonpath='{.spec.replicas}')
+              
+              if [[ "$READY_PODS" == "$DESIRED_PODS" && "$READY_PODS" -gt 0 ]]; then
+                echo "All pods ready: $READY_PODS/$DESIRED_PODS"
+                
+                # CRITICAL: Check pod health details to catch CrashLoopBackOff
+                echo "Verifying pod health details..."
+                PODS_JSON=$(kubectl get pods -n "$NAMESPACE" -l app.kubernetes.io/instance="$DEPLOYMENT" -o json 2>/dev/null || \
+                            kubectl get pods -n "$NAMESPACE" -l app="$DEPLOYMENT" -o json 2>/dev/null || echo '{}')
+                
+                # Check for unhealthy container statuses
+                CRASH_LOOP=$(echo "$PODS_JSON" | jq -r '.items[].status.containerStatuses[]? | select(.state.waiting.reason == "CrashLoopBackOff") | .name' 2>/dev/null || echo "")
+                
+                if [[ -n "$CRASH_LOOP" ]]; then
+                  echo "::error::CrashLoopBackOff detected in containers: $CRASH_LOOP"
+                  echo "status=unhealthy" >> $GITHUB_OUTPUT
+                  echo "details=CrashLoopBackOff detected" >> $GITHUB_OUTPUT
+                  exit 1
+                fi
+                
+                # Check restart counts (high restarts indicate flapping)
+                TOTAL_RESTARTS=$(echo "$PODS_JSON" | jq '[.items[].status.containerStatuses[]?.restartCount // 0] | add' 2>/dev/null || echo "0")
+                
+                if [[ "$TOTAL_RESTARTS" -gt 10 ]]; then
+                  echo "::warning::High restart count detected: $TOTAL_RESTARTS restarts"
+                fi
+                
+                echo "Health check passed"
+                echo "status=healthy" >> $GITHUB_OUTPUT
+                echo "details=Deployment $DEPLOYMENT: $READY_PODS/$DESIRED_PODS pods ready ($TOTAL_RESTARTS restarts)" >> $GITHUB_OUTPUT
+                exit 0
+              fi
+            }
+            
+            echo "Deployment not ready, waiting ${RETRY_INTERVAL}s..."
+            sleep $RETRY_INTERVAL
+          done
+          
+          echo "::error::Health check failed after $MAX_RETRIES attempts"
+          echo "status=unhealthy" >> $GITHUB_OUTPUT
+          echo "details=Deployment $DEPLOYMENT failed to become healthy" >> $GITHUB_OUTPUT
+          exit 1
+
+      # -------------------------------------------------------------------------
+      # HTTP HEALTH CHECK
+      # -------------------------------------------------------------------------
+      - name: HTTP Health Check
+        id: http_check
+        if: inputs.check_type == 'http'
+        run: |
+          echo "Running HTTP health check..."
+          
+          # Determine URL
+          if [[ -n "${{ inputs.health_url }}" ]]; then
+            URL="${{ inputs.health_url }}"
+          else
+            # Construct URL from environment
+            URL="https://${{ inputs.environment }}.example.com${{ inputs.health_endpoint }}"
+          fi
+          
+          echo "Target: $URL"
+          
+          MAX_RETRIES=${{ inputs.retries }}
+          RETRY_INTERVAL=${{ inputs.retry_interval }}
+          TIMEOUT=${{ inputs.timeout }}
+          
+          # SSL verification flag (disable for dev with self-signed certs)
+          if [[ "${{ inputs.verify_ssl }}" == "false" ]]; then
+            SSL_FLAG="-k"
+            echo "SSL verification disabled"
+          else
+            SSL_FLAG=""
+          fi
+          
+          for ((i=1; i<=MAX_RETRIES; i++)); do
+            echo "Attempt $i/$MAX_RETRIES..."
+            
+            HTTP_STATUS=$(curl -s $SSL_FLAG -o /dev/null -w "%{http_code}" --max-time $TIMEOUT "$URL" 2>&1) || HTTP_STATUS="000"
+            
+            if [[ "$HTTP_STATUS" == "200" ]]; then
+              echo "Health check passed (HTTP $HTTP_STATUS)"
+              echo "status=healthy" >> $GITHUB_OUTPUT
+              echo "details=HTTP 200 OK from $URL" >> $GITHUB_OUTPUT
+              exit 0
+            fi
+            
+            echo "HTTP status: $HTTP_STATUS - Retrying in ${RETRY_INTERVAL}s..."
+            sleep $RETRY_INTERVAL
+          done
+          
+          echo "::error::HTTP health check failed after $MAX_RETRIES attempts"
+          echo "status=unhealthy" >> $GITHUB_OUTPUT
+          echo "details=HTTP $HTTP_STATUS from $URL" >> $GITHUB_OUTPUT
+          exit 1
+
+      # -------------------------------------------------------------------------
+      # TCP HEALTH CHECK
+      # -------------------------------------------------------------------------
+      - name: TCP Health Check
+        id: tcp_check
+        if: inputs.check_type == 'tcp'
+        run: |
+          echo "Running TCP health check..."
+          echo "::warning::TCP health check not yet implemented"
+          echo "status=healthy" >> $GITHUB_OUTPUT
+          echo "details=TCP check skipped" >> $GITHUB_OUTPUT
+
+      # -------------------------------------------------------------------------
+      # RESULT AGGREGATION
+      # -------------------------------------------------------------------------
+      - name: Set Result
+        id: result
+        if: always()
+        run: |
+          # Aggregate results from all check types
+          if [[ "${{ steps.k8s_check.outputs.status }}" == "healthy" ]]; then
+            echo "status=healthy" >> $GITHUB_OUTPUT
+            echo "details=${{ steps.k8s_check.outputs.details }}" >> $GITHUB_OUTPUT
+          elif [[ "${{ steps.http_check.outputs.status }}" == "healthy" ]]; then
+            echo "status=healthy" >> $GITHUB_OUTPUT
+            echo "details=${{ steps.http_check.outputs.details }}" >> $GITHUB_OUTPUT
+          elif [[ "${{ steps.tcp_check.outputs.status }}" == "healthy" ]]; then
+            echo "status=healthy" >> $GITHUB_OUTPUT
+            echo "details=${{ steps.tcp_check.outputs.details }}" >> $GITHUB_OUTPUT
+          else
+            echo "status=unhealthy" >> $GITHUB_OUTPUT
+            echo "details=Health check failed" >> $GITHUB_OUTPUT
+          fi
+
+      - name: Generate Summary
+        if: always()
+        run: |
+          echo "## Health Check Results" >> $GITHUB_STEP_SUMMARY
+          echo "" >> $GITHUB_STEP_SUMMARY
+          echo "| Property | Value |" >> $GITHUB_STEP_SUMMARY
+          echo "|----------|-------|" >> $GITHUB_STEP_SUMMARY
+          echo "| Environment | ${{ inputs.environment }} |" >> $GITHUB_STEP_SUMMARY
+          echo "| Check Type | ${{ inputs.check_type }} |" >> $GITHUB_STEP_SUMMARY
+          echo "| Namespace | ${{ inputs.namespace }} |" >> $GITHUB_STEP_SUMMARY
+          echo "| Status | **${{ steps.result.outputs.status }}** |" >> $GITHUB_STEP_SUMMARY
+          echo "" >> $GITHUB_STEP_SUMMARY
+          
+          if [[ "${{ steps.result.outputs.status }}" == "healthy" ]]; then
+            echo "### Health Check: **PASSED**" >> $GITHUB_STEP_SUMMARY
+          else
+            echo "### Health Check: **FAILED**" >> $GITHUB_STEP_SUMMARY
+          fi

@@ -1,0 +1,546 @@
+name: "Orchestrator: CD Pipeline"
+
+# ------------------------------------------------------------------------------
+# THE CD BRAIN - PRODUCTION IMPLEMENTATION
+# 
+# ARCHITECTURE:
+# - Uses reusable deployment modules (no inline logic)
+# - Proper job dependencies and error handling
+# - Input validation before deployment
+# - Integration with CI pipeline outputs
+# 
+# FLOW:
+# 1. Load & validate configuration
+# 2. Send "starting" notification
+# 3. Route to target-specific deployment module (deploy-eks/ec2/ecs)
+# 4. Health check (if enabled)
+# 5. Auto-rollback (if health check fails)
+# 6. Send final notification
+# 7. Generate summary
+# ------------------------------------------------------------------------------
+
+on:
+  workflow_call:
+    inputs:
+      # --- REQUIRED INPUTS ---
+      environment:
+        description: "Target environment: dev, qa, staging, production"
+        type: string
+        required: true
+      image_uri:
+        description: "Docker image URI to deploy"
+        type: string
+        required: true
+      
+      # --- OPTIONAL INPUTS ---
+      config_path:
+        description: "Path to DevX config file"
+        type: string
+        default: "devx-config.yaml"
+      dry_run:
+        description: "Perform dry-run without actual deployment"
+        type: boolean
+        default: false
+      skip_health_check:
+        description: "Skip post-deployment health checks"
+        type: boolean
+        default: false
+      
+    secrets:
+      GOOGLE_CHAT_WEBHOOK:
+        required: false
+      NEXUS_USERNAME:
+        required: false
+      NEXUS_PASSWORD:
+        required: false
+      SSH_PRIVATE_KEY:
+        description: "SSH private key for EC2 SSH deployments"
+        required: false
+
+    outputs:
+      deployment_status:
+        description: "Final deployment status"
+        value: ${{ jobs.summary.outputs.status }}
+      deployed_image:
+        description: "Image that was deployed"
+        value: ${{ inputs.image_uri }}
+      deployment_url:
+        description: "Deployed application URL"
+        value: ${{ jobs.deploy-eks.outputs.url || jobs.deploy-ec2.outputs.url || jobs.deploy-ecs.outputs.url || '' }}
+
+  workflow_dispatch:
+    inputs:
+      environment:
+        description: "Target environment"
+        type: choice
+        options:
+          - dev
+          - qa
+          - staging
+          - production
+        required: true
+      image_uri:
+        description: "Docker image URI to deploy"
+        type: string
+        required: true
+      config_path:
+        description: "Config file path"
+        type: string
+        default: "devx-config.yaml"
+      dry_run:
+        description: "Dry run mode"
+        type: boolean
+        default: false
+
+# Prevent concurrent deployments to the same environment
+concurrency:
+  group: cd-${{ github.workflow }}-${{ inputs.environment }}
+  cancel-in-progress: false  # NEVER cancel in-progress deployments
+
+permissions:
+  contents: read
+  id-token: write         # AWS OIDC
+  actions: write          # Artifact access
+  deployments: write      # GitHub Deployments API
+
+jobs:
+  # ---------------------------------------------------------------------------
+  # 1. VALIDATE INPUTS & LOAD CONFIGURATION
+  # ---------------------------------------------------------------------------
+  validate-and-load:
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    outputs:
+      config: ${{ steps.parse.outputs.config }}
+      deployment_target: ${{ steps.extract.outputs.target }}
+      cluster_name: ${{ steps.extract.outputs.cluster_name }}
+      namespace: ${{ steps.extract.outputs.namespace }}
+      aws_region: ${{ steps.extract.outputs.aws_region }}
+      role_to_assume: ${{ steps.extract.outputs.role_to_assume }}
+      # EKS-specific
+      helm_chart_path: ${{ steps.extract.outputs.helm_chart_path }}
+      helm_release_name: ${{ steps.extract.outputs.helm_release_name }}
+      helm_values_file: ${{ steps.extract.outputs.helm_values_file }}
+      helm_set_values: ${{ steps.extract.outputs.helm_set_values }}
+      # EC2-specific
+      ec2_deploy_method: ${{ steps.extract.outputs.ec2_deploy_method }}
+      target_type: ${{ steps.extract.outputs.target_type }}
+      target_tag_key: ${{ steps.extract.outputs.target_tag_key }}
+      target_tag_value: ${{ steps.extract.outputs.target_tag_value }}
+      instance_ids: ${{ steps.extract.outputs.instance_ids }}
+      ssh_user: ${{ steps.extract.outputs.ssh_user }}
+      docker_compose_path: ${{ steps.extract.outputs.docker_compose_path }}
+      service_name: ${{ steps.extract.outputs.service_name }}
+      # ECS-specific
+      ecs_cluster_name: ${{ steps.extract.outputs.ecs_cluster_name }}
+      ecs_service_name: ${{ steps.extract.outputs.ecs_service_name }}
+      task_definition_family: ${{ steps.extract.outputs.task_definition_family }}
+      container_name: ${{ steps.extract.outputs.container_name }}
+      # Common
+      health_check_enabled: ${{ steps.extract.outputs.health_check_enabled }}
+      health_check_endpoint: ${{ steps.extract.outputs.health_check_endpoint }}
+      health_check_type: ${{ steps.extract.outputs.health_check_type }}
+      notifications_enabled: ${{ steps.extract.outputs.notifications_enabled }}
+      auto_rollback: ${{ steps.extract.outputs.auto_rollback }}
+
+    steps:
+      - name: Checkout Code
+        uses: actions/checkout@v4.1.1
+
+      # ========================================================================
+      # INPUT VALIDATION (Critical for security)
+      # ========================================================================
+      - name: Validate Inputs
+        run: |
+          echo "Validating inputs..."
+          
+          # Validate environment value
+          if [[ ! "${{ inputs.environment }}" =~ ^(dev|qa|staging|production)$ ]]; then
+            echo "::error::Invalid environment: ${{ inputs.environment }}"
+            echo "::error::Must be one of: dev, qa, staging, production"
+            exit 1
+          fi
+          
+          # Validate image_uri format (security: block command injection)
+          if [[ ! "${{ inputs.image_uri }}" =~ ^[a-zA-Z0-9._\-/:@]+$ ]]; then
+            echo "::error::Invalid image_uri format: ${{ inputs.image_uri }}"
+            echo "::error::Must match pattern: registry.com/image:tag"
+            exit 1
+          fi
+          
+          # Validate image_uri contains tag
+          if [[ ! "${{ inputs.image_uri }}" =~ .+:.+ ]]; then
+            echo "::error::image_uri must include tag (e.g., registry.com/image:tag)"
+            exit 1
+          fi
+          
+          # Validate config file exists
+          if [[ ! -f "${{ inputs.config_path }}" ]]; then
+            echo "::error::Config file not found: ${{ inputs.config_path }}"
+            exit 1
+          fi
+          
+          echo "Input validation passed"
+
+      - name: Validate Config File
+        run: |
+          echo "Validating configuration..."
+          
+          # Validate YAML syntax
+          yq '.' ${{ inputs.config_path }} > /dev/null || {
+            echo "::error::Invalid YAML syntax in ${{ inputs.config_path }}"
+            exit 1
+          }
+          
+          # Validate deployment section exists
+          DEPLOY_ENABLED=$(yq '.deployment.enabled // false' ${{ inputs.config_path }})
+          if [[ "$DEPLOY_ENABLED" != "true" ]]; then
+            echo "::error::Deployment is not enabled in config"
+            echo "::error::Set deployment.enabled: true in ${{ inputs.config_path }}"
+            exit 1
+          fi
+          
+          # Validate target environment is configured
+          ENV_ENABLED=$(yq ".deployment.environments.${{ inputs.environment }}.enabled // false" ${{ inputs.config_path }})
+          if [[ "$ENV_ENABLED" != "true" ]]; then
+            echo "::error::Environment '${{ inputs.environment }}' is not enabled in config"
+            exit 1
+          fi
+          
+          # Validate deployment target
+          TARGET=$(yq '.deployment.target // ""' ${{ inputs.config_path }})
+          if [[ ! "$TARGET" =~ ^(eks|ec2|ecs)$ ]]; then
+            echo "::error::Invalid deployment target: $TARGET"
+            echo "::error::Must be one of: eks, ec2, ecs"
+            exit 1
+          fi
+          
+          echo "Config validation passed"
+
+      - name: Parse Config
+        id: parse
+        run: |
+          echo "config<<EOF" >> $GITHUB_OUTPUT
+          yq -o=json ${{ inputs.config_path }} >> $GITHUB_OUTPUT
+          echo "EOF" >> $GITHUB_OUTPUT
+
+      - name: Extract Deployment Settings
+        id: extract
+        run: |
+          CONFIG_FILE="${{ inputs.config_path }}"
+          ENV="${{ inputs.environment }}"
+          
+          echo "Extracting configuration for environment: $ENV"
+          
+          # Deployment target
+          TARGET=$(yq '.deployment.target' $CONFIG_FILE)
+          echo "target=$TARGET" >> $GITHUB_OUTPUT
+          echo "  Target: $TARGET"
+          
+          # AWS settings
+          REGION=$(yq ".deployment.environments.$ENV.region // .aws.default_region // \"us-east-1\"" $CONFIG_FILE)
+          ROLE=$(yq ".aws.role_to_assume // \"\"" $CONFIG_FILE)
+          echo "aws_region=$REGION" >> $GITHUB_OUTPUT
+          echo "role_to_assume=$ROLE" >> $GITHUB_OUTPUT
+          
+          # Target-specific extraction
+          case "$TARGET" in
+            eks)
+              CLUSTER=$(yq ".deployment.environments.$ENV.cluster_name // \"\"" $CONFIG_FILE)
+              NAMESPACE=$(yq ".deployment.environments.$ENV.namespace // \"default\"" $CONFIG_FILE)
+              CHART=$(yq ".deployment.helm.chart_path // .deployment.environments.$ENV.helm.chart_path // \"\"" $CONFIG_FILE)
+              RELEASE=$(yq ".deployment.helm.release_name // .deployment.environments.$ENV.helm.release_name // \"\"" $CONFIG_FILE)
+              VALUES=$(yq ".deployment.environments.$ENV.values_file // .deployment.environments.$ENV.helm.values_file // \"\"" $CONFIG_FILE)
+              SET_VALUES=$(yq ".deployment.environments.$ENV.helm.set_values // \"\"" $CONFIG_FILE)
+              
+              echo "cluster_name=$CLUSTER" >> $GITHUB_OUTPUT
+              echo "namespace=$NAMESPACE" >> $GITHUB_OUTPUT
+              echo "helm_chart_path=$CHART" >> $GITHUB_OUTPUT
+              echo "helm_release_name=$RELEASE" >> $GITHUB_OUTPUT
+              echo "helm_values_file=$VALUES" >> $GITHUB_OUTPUT
+              echo "helm_set_values=$SET_VALUES" >> $GITHUB_OUTPUT
+              ;;
+            
+            ec2)
+              # EC2 deployment method: 'ssm' or 'ssh'
+              DEPLOY_METHOD=$(yq ".deployment.environments.$ENV.deploy_method // \"ssm\"" $CONFIG_FILE)
+              TARGET_TYPE=$(yq ".deployment.environments.$ENV.target_type // \"tag\"" $CONFIG_FILE)
+              TAG_KEY=$(yq ".deployment.environments.$ENV.target_tag_key // \"Environment\"" $CONFIG_FILE)
+              TAG_VALUE=$(yq ".deployment.environments.$ENV.target_tag_value // \"$ENV\"" $CONFIG_FILE)
+              INSTANCE_IDS=$(yq ".deployment.environments.$ENV.instance_ids // \"\"" $CONFIG_FILE)
+              SSH_USER=$(yq ".deployment.environments.$ENV.ssh_user // \"ec2-user\"" $CONFIG_FILE)
+              COMPOSE_PATH=$(yq ".deployment.environments.$ENV.docker_compose_path // \"/app/docker-compose.yaml\"" $CONFIG_FILE)
+              SERVICE_NAME=$(yq ".deployment.environments.$ENV.service_name // \"app\"" $CONFIG_FILE)
+              
+              echo "ec2_deploy_method=$DEPLOY_METHOD" >> $GITHUB_OUTPUT
+              echo "target_type=$TARGET_TYPE" >> $GITHUB_OUTPUT
+              echo "target_tag_key=$TAG_KEY" >> $GITHUB_OUTPUT
+              echo "target_tag_value=$TAG_VALUE" >> $GITHUB_OUTPUT
+              echo "instance_ids=$INSTANCE_IDS" >> $GITHUB_OUTPUT
+              echo "ssh_user=$SSH_USER" >> $GITHUB_OUTPUT
+              echo "docker_compose_path=$COMPOSE_PATH" >> $GITHUB_OUTPUT
+              echo "service_name=$SERVICE_NAME" >> $GITHUB_OUTPUT
+              echo "  EC2 Deploy Method: $DEPLOY_METHOD"
+              ;;
+            
+            ecs)
+              ECS_CLUSTER=$(yq ".deployment.environments.$ENV.cluster_name // \"\"" $CONFIG_FILE)
+              SERVICE=$(yq ".deployment.environments.$ENV.service_name // \"\"" $CONFIG_FILE)
+              TASK_FAMILY=$(yq ".deployment.environments.$ENV.task_definition_family // \"\"" $CONFIG_FILE)
+              CONTAINER=$(yq ".deployment.environments.$ENV.container_name // \"app\"" $CONFIG_FILE)
+              
+              echo "ecs_cluster_name=$ECS_CLUSTER" >> $GITHUB_OUTPUT
+              echo "ecs_service_name=$SERVICE" >> $GITHUB_OUTPUT
+              echo "task_definition_family=$TASK_FAMILY" >> $GITHUB_OUTPUT
+              echo "container_name=$CONTAINER" >> $GITHUB_OUTPUT
+              ;;
+          esac
+          
+          # Health check settings
+          HC_ENABLED=$(yq ".deployment.environments.$ENV.health_check.enabled // \"true\"" $CONFIG_FILE)
+          HC_ENDPOINT=$(yq ".deployment.environments.$ENV.health_check.endpoint // \"/health\"" $CONFIG_FILE)
+          HC_TYPE=$(yq ".deployment.environments.$ENV.health_check.type // \"k8s\"" $CONFIG_FILE)
+          
+          echo "health_check_enabled=$HC_ENABLED" >> $GITHUB_OUTPUT
+          echo "health_check_endpoint=$HC_ENDPOINT" >> $GITHUB_OUTPUT
+          echo "health_check_type=$HC_TYPE" >> $GITHUB_OUTPUT
+          
+          # Rollback settings
+          AUTO_ROLLBACK=$(yq ".deployment.environments.$ENV.auto_rollback // \"true\"" $CONFIG_FILE)
+          echo "auto_rollback=$AUTO_ROLLBACK" >> $GITHUB_OUTPUT
+          
+          # Notification settings
+          NOTIFY_ENABLED=$(yq ".deployment.notifications.enabled // .deployment.environments.$ENV.notifications.enabled // \"true\"" $CONFIG_FILE)
+          echo "notifications_enabled=$NOTIFY_ENABLED" >> $GITHUB_OUTPUT
+          
+          echo "Configuration extracted successfully"
+
+  # ---------------------------------------------------------------------------
+  # 2. NOTIFY: DEPLOYMENT STARTING
+  # ---------------------------------------------------------------------------
+  notify-start:
+    needs: validate-and-load
+    if: needs.validate-and-load.outputs.notifications_enabled == 'true'
+    uses: ./.github/workflows/notify-google-chat.yaml
+    secrets:
+      GOOGLE_CHAT_WEBHOOK: ${{ secrets.GOOGLE_CHAT_WEBHOOK }}
+    with:
+      status: starting
+      environment: ${{ inputs.environment }}
+      image_uri: ${{ inputs.image_uri }}
+
+  # ---------------------------------------------------------------------------
+  # 3. DEPLOYMENT (Routed to Target-Specific Module)
+  # ---------------------------------------------------------------------------
+  
+  # EKS DEPLOYMENT (via reusable module)
+  deploy-eks:
+    needs: [validate-and-load, notify-start]
+    if: |
+      always() &&
+      needs.validate-and-load.result == 'success' &&
+      needs.validate-and-load.outputs.deployment_target == 'eks'
+    uses: ./.github/workflows/deploy-eks.yaml
+    with:
+      environment: ${{ inputs.environment }}
+      image_uri: ${{ inputs.image_uri }}
+      cluster_name: ${{ needs.validate-and-load.outputs.cluster_name }}
+      namespace: ${{ needs.validate-and-load.outputs.namespace }}
+      helm_chart_path: ${{ needs.validate-and-load.outputs.helm_chart_path }}
+      helm_release_name: ${{ needs.validate-and-load.outputs.helm_release_name }}
+      helm_values_file: ${{ needs.validate-and-load.outputs.helm_values_file }}
+      helm_set_values: ${{ needs.validate-and-load.outputs.helm_set_values }}
+      aws_region: ${{ needs.validate-and-load.outputs.aws_region }}
+      role_to_assume: ${{ needs.validate-and-load.outputs.role_to_assume }}
+      dry_run: ${{ inputs.dry_run }}
+      atomic: true
+
+  # EC2 DEPLOYMENT (via reusable module - SSM or SSH)
+  deploy-ec2:
+    needs: [validate-and-load, notify-start]
+    if: |
+      always() &&
+      needs.validate-and-load.result == 'success' &&
+      needs.validate-and-load.outputs.deployment_target == 'ec2'
+    uses: ./.github/workflows/deploy-ec2.yaml
+    secrets:
+      SSH_PRIVATE_KEY: ${{ secrets.SSH_PRIVATE_KEY }}
+    with:
+      environment: ${{ inputs.environment }}
+      image_uri: ${{ inputs.image_uri }}
+      deploy_method: ${{ needs.validate-and-load.outputs.ec2_deploy_method }}
+      target_type: ${{ needs.validate-and-load.outputs.target_type }}
+      target_tag_key: ${{ needs.validate-and-load.outputs.target_tag_key }}
+      target_tag_value: ${{ needs.validate-and-load.outputs.target_tag_value }}
+      instance_ids: ${{ needs.validate-and-load.outputs.instance_ids }}
+      ssh_user: ${{ needs.validate-and-load.outputs.ssh_user }}
+      docker_compose_path: ${{ needs.validate-and-load.outputs.docker_compose_path }}
+      service_name: ${{ needs.validate-and-load.outputs.service_name }}
+      aws_region: ${{ needs.validate-and-load.outputs.aws_region }}
+      role_to_assume: ${{ needs.validate-and-load.outputs.role_to_assume }}
+
+  # ECS DEPLOYMENT (via reusable module)
+  deploy-ecs:
+    needs: [validate-and-load, notify-start]
+    if: |
+      always() &&
+      needs.validate-and-load.result == 'success' &&
+      needs.validate-and-load.outputs.deployment_target == 'ecs'
+    uses: ./.github/workflows/deploy-ecs.yaml
+    with:
+      environment: ${{ inputs.environment }}
+      image_uri: ${{ inputs.image_uri }}
+      cluster_name: ${{ needs.validate-and-load.outputs.ecs_cluster_name }}
+      service_name: ${{ needs.validate-and-load.outputs.ecs_service_name }}
+      task_definition_family: ${{ needs.validate-and-load.outputs.task_definition_family }}
+      container_name: ${{ needs.validate-and-load.outputs.container_name }}
+      aws_region: ${{ needs.validate-and-load.outputs.aws_region }}
+      role_to_assume: ${{ needs.validate-and-load.outputs.role_to_assume }}
+      force_new_deployment: true
+      wait_for_stability: true
+
+  # ---------------------------------------------------------------------------
+  # 4. HEALTH CHECK
+  # ---------------------------------------------------------------------------
+  health-check:
+    needs: [validate-and-load, deploy-eks, deploy-ec2, deploy-ecs]
+    if: |
+      always() &&
+      (needs.deploy-eks.result == 'success' || needs.deploy-ec2.result == 'success' || needs.deploy-ecs.result == 'success') &&
+      needs.validate-and-load.outputs.health_check_enabled == 'true' &&
+      inputs.skip_health_check != true &&
+      inputs.dry_run != true
+    uses: ./.github/workflows/health-check.yaml
+    with:
+      environment: ${{ inputs.environment }}
+      health_endpoint: ${{ needs.validate-and-load.outputs.health_check_endpoint }}
+      check_type: ${{ needs.validate-and-load.outputs.health_check_type }}
+      namespace: ${{ needs.validate-and-load.outputs.namespace }}
+      cluster_name: ${{ needs.validate-and-load.outputs.cluster_name }}
+      aws_region: ${{ needs.validate-and-load.outputs.aws_region }}
+      role_to_assume: ${{ needs.validate-and-load.outputs.role_to_assume }}
+
+  # ---------------------------------------------------------------------------
+  # 5. ROLLBACK (On Health Check Failure)
+  # ---------------------------------------------------------------------------
+  rollback:
+    needs: [validate-and-load, deploy-eks, deploy-ec2, deploy-ecs, health-check]
+    if: |
+      always() &&
+      needs.health-check.result == 'failure' &&
+      needs.validate-and-load.outputs.auto_rollback == 'true' &&
+      inputs.dry_run != true
+    uses: ./.github/workflows/rollback.yaml
+    with:
+      environment: ${{ inputs.environment }}
+      deployment_target: ${{ needs.validate-and-load.outputs.deployment_target }}
+      cluster_name: ${{ needs.validate-and-load.outputs.cluster_name || needs.validate-and-load.outputs.ecs_cluster_name }}
+      namespace: ${{ needs.validate-and-load.outputs.namespace }}
+      helm_release_name: ${{ needs.validate-and-load.outputs.helm_release_name }}
+      service_name: ${{ needs.validate-and-load.outputs.ecs_service_name }}
+      task_definition_family: ${{ needs.validate-and-load.outputs.task_definition_family }}
+      aws_region: ${{ needs.validate-and-load.outputs.aws_region }}
+      role_to_assume: ${{ needs.validate-and-load.outputs.role_to_assume }}
+
+  # ---------------------------------------------------------------------------
+  # 5.5 EXECUTE EC2 ROLLBACK (Re-deploy old image)
+  # ---------------------------------------------------------------------------
+  rollback-ec2-execution:
+    needs: [validate-and-load, rollback]
+    if: |
+      always() &&
+      needs.rollback.result == 'success' &&
+      needs.rollback.outputs.status == 'success' &&
+      needs.validate-and-load.outputs.deployment_target == 'ec2' &&
+      needs.rollback.outputs.rollback_image_uri != ''
+    uses: ./.github/workflows/deploy-ec2.yaml
+    secrets:
+      SSH_PRIVATE_KEY: ${{ secrets.SSH_PRIVATE_KEY }}
+    with:
+      environment: ${{ inputs.environment }}
+      image_uri: ${{ needs.rollback.outputs.rollback_image_uri }}
+      deploy_method: ${{ needs.validate-and-load.outputs.ec2_deploy_method }}
+      target_type: ${{ needs.validate-and-load.outputs.target_type }}
+      target_tag_key: ${{ needs.validate-and-load.outputs.target_tag_key }}
+      target_tag_value: ${{ needs.validate-and-load.outputs.target_tag_value }}
+      instance_ids: ${{ needs.validate-and-load.outputs.instance_ids }}
+      ssh_user: ${{ needs.validate-and-load.outputs.ssh_user }}
+      docker_compose_path: ${{ needs.validate-and-load.outputs.docker_compose_path }}
+      service_name: ${{ needs.validate-and-load.outputs.service_name }}
+      aws_region: ${{ needs.validate-and-load.outputs.aws_region }}
+      role_to_assume: ${{ needs.validate-and-load.outputs.role_to_assume }}
+
+  # ---------------------------------------------------------------------------
+  # 6. NOTIFY: FINAL RESULT
+  # ---------------------------------------------------------------------------
+  notify-result:
+    needs: [validate-and-load, deploy-eks, deploy-ec2, deploy-ecs, health-check, rollback, rollback-ec2-execution]
+    if: always() && needs.validate-and-load.outputs.notifications_enabled == 'true'
+    uses: ./.github/workflows/notify-google-chat.yaml
+    secrets:
+      GOOGLE_CHAT_WEBHOOK: ${{ secrets.GOOGLE_CHAT_WEBHOOK }}
+    with:
+      status: ${{ needs.health-check.result == 'success' && 'success' || (needs.rollback.result == 'success' && 'rollback' || 'failure') }}
+      environment: ${{ inputs.environment }}
+      image_uri: ${{ inputs.image_uri }}
+
+  # ---------------------------------------------------------------------------
+  # 7. PIPELINE SUMMARY
+  # ---------------------------------------------------------------------------
+  summary:
+    if: always()
+    needs: [validate-and-load, deploy-eks, deploy-ec2, deploy-ecs, health-check, rollback, rollback-ec2-execution, notify-result]
+    runs-on: ubuntu-latest
+    timeout-minutes: 2
+    
+    outputs:
+      status: ${{ steps.status.outputs.final_status }}
+
+    steps:
+      - name: Generate Pipeline Summary
+        run: |
+          echo "## CD Pipeline Summary" >> $GITHUB_STEP_SUMMARY
+          echo "" >> $GITHUB_STEP_SUMMARY
+          
+          echo "### Deployment Details" >> $GITHUB_STEP_SUMMARY
+          echo "| Property | Value |" >> $GITHUB_STEP_SUMMARY
+          echo "|----------|-------|" >> $GITHUB_STEP_SUMMARY
+          echo "| **Environment** | ${{ inputs.environment }} |" >> $GITHUB_STEP_SUMMARY
+          echo "| **Target** | ${{ needs.validate-and-load.outputs.deployment_target }} |" >> $GITHUB_STEP_SUMMARY
+          echo "| **Image** | \`${{ inputs.image_uri }}\` |" >> $GITHUB_STEP_SUMMARY
+          echo "| **Dry Run** | ${{ inputs.dry_run }} |" >> $GITHUB_STEP_SUMMARY
+          echo "" >> $GITHUB_STEP_SUMMARY
+          
+          echo "### Stage Results" >> $GITHUB_STEP_SUMMARY
+          echo "| Stage | Status |" >> $GITHUB_STEP_SUMMARY
+          echo "|-------|--------|" >> $GITHUB_STEP_SUMMARY
+          echo "| Config Validation | ${{ needs.validate-and-load.result }} |" >> $GITHUB_STEP_SUMMARY
+          echo "| EKS Deployment | ${{ needs.deploy-eks.result }} |" >> $GITHUB_STEP_SUMMARY
+          echo "| EC2 Deployment | ${{ needs.deploy-ec2.result }} |" >> $GITHUB_STEP_SUMMARY
+          echo "| ECS Deployment | ${{ needs.deploy-ecs.result }} |" >> $GITHUB_STEP_SUMMARY
+          echo "| Health Check | ${{ needs.health-check.result }} |" >> $GITHUB_STEP_SUMMARY
+          echo "| Rollback | ${{ needs.rollback.result }} |" >> $GITHUB_STEP_SUMMARY
+          echo "| Notification | ${{ needs.notify-result.result }} |" >> $GITHUB_STEP_SUMMARY
+
+      - name: Determine Final Status
+        id: status
+        run: |
+          if [[ "${{ needs.health-check.result }}" == "success" ]]; then
+            echo "final_status=success" >> $GITHUB_OUTPUT
+            echo "### Deployment Status: **SUCCESS**" >> $GITHUB_STEP_SUMMARY
+          elif [[ "${{ needs.rollback.result }}" == "success" ]]; then
+            echo "final_status=rolled_back" >> $GITHUB_OUTPUT
+            echo "### Deployment Status: **ROLLED BACK**" >> $GITHUB_STEP_SUMMARY
+          elif [[ "${{ needs.deploy-eks.result }}" == "failure" ]] || 
+               [[ "${{ needs.deploy-ec2.result }}" == "failure" ]] || 
+               [[ "${{ needs.deploy-ecs.result }}" == "failure" ]]; then
+            echo "final_status=failed" >> $GITHUB_OUTPUT
+            echo "### Deployment Status: **FAILED**" >> $GITHUB_STEP_SUMMARY
+            exit 1
+          elif [[ "${{ inputs.dry_run }}" == "true" ]]; then
+            echo "final_status=dry_run" >> $GITHUB_OUTPUT
+            echo "### Deployment Status: **DRY RUN COMPLETE**" >> $GITHUB_STEP_SUMMARY
+          else
+            echo "final_status=unknown" >> $GITHUB_OUTPUT
+            echo "### Deployment Status: **UNKNOWN**" >> $GITHUB_STEP_SUMMARY
+          fi

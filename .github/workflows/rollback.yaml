@@ -1,0 +1,332 @@
+name: "Module: Rollback"
+
+# ------------------------------------------------------------------------------
+# Rollback deployment to previous stable version.
+# Supports: Helm rollback, Kubernetes rollback, manual trigger.
+# ------------------------------------------------------------------------------
+
+on:
+  workflow_call:
+    inputs:
+      environment:
+        description: "Target environment"
+        type: string
+        required: true
+      deployment_target:
+        description: "Deployment target: eks, ec2, ecs"
+        type: string
+        required: true
+      
+      # Kubernetes settings
+      cluster_name:
+        description: "EKS cluster name"
+        type: string
+        default: ""
+      namespace:
+        description: "Kubernetes namespace"
+        type: string
+        default: "default"
+      helm_release_name:
+        description: "Helm release name"
+        type: string
+        default: ""
+      revision:
+        description: "Specific revision to rollback to (0 = previous)"
+        type: number
+        default: 0
+      
+      # ECS settings
+      service_name:
+        description: "ECS service name"
+        type: string
+        default: ""
+      task_definition_family:
+        description: "ECS task definition family"
+        type: string
+        default: ""
+      
+      # AWS
+      aws_region:
+        description: "AWS region"
+        type: string
+        default: "us-east-1"
+      role_to_assume:
+        description: "AWS IAM role for OIDC"
+        type: string
+        default: ""
+
+    outputs:
+      status:
+        description: "Rollback status"
+        value: ${{ jobs.rollback.outputs.status }}
+      rolled_back_to:
+        description: "Revision rolled back to"
+        value: ${{ jobs.rollback.outputs.revision }}
+      rollback_image_uri:
+        description: "Image URI to rollback to (for EC2)"
+        value: ${{ jobs.rollback.outputs.rollback_image_uri }}
+
+  # Manual rollback trigger
+  workflow_dispatch:
+    inputs:
+      environment:
+        description: "Environment"
+        type: choice
+        options:
+          - dev
+          - qa
+          - staging
+          - production
+        required: true
+      deployment_target:
+        description: "Deployment target"
+        type: choice
+        options:
+          - eks
+          - ec2
+          - ecs
+        required: true
+      cluster_name:
+        description: "EKS cluster name"
+        type: string
+        required: true
+      namespace:
+        description: "Namespace"
+        type: string
+        default: "default"
+      helm_release_name:
+        description: "Helm release name"
+        type: string
+        required: true
+      revision:
+        description: "Revision to rollback to (0 = previous)"
+        type: number
+        default: 0
+
+permissions:
+  contents: read
+  id-token: write
+
+jobs:
+  rollback:
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    
+    # Require approval for production rollbacks
+    environment:
+      name: ${{ inputs.environment }}
+    
+    outputs:
+      status: ${{ steps.result.outputs.status }}
+      revision: ${{ steps.rollback.outputs.revision }}
+      rollback_image_uri: ${{ steps.ec2_rollback.outputs.rollback_image_uri }}
+
+    steps:
+      - name: Configure AWS Credentials
+        if: inputs.role_to_assume != ''
+        uses: aws-actions/configure-aws-credentials@v4.0.2
+        with:
+          role-to-assume: ${{ inputs.role_to_assume }}
+          aws-region: ${{ inputs.aws_region }}
+
+      - name: Setup kubectl
+        if: inputs.deployment_target == 'eks' && inputs.cluster_name != ''
+        run: |
+          aws eks update-kubeconfig --name "${{ inputs.cluster_name }}" --region ${{ inputs.aws_region }}
+          kubectl cluster-info
+
+      # -------------------------------------------------------------------------
+      # EKS/HELM ROLLBACK
+      # -------------------------------------------------------------------------
+      - name: Helm Rollback
+        id: rollback
+        if: inputs.deployment_target == 'eks' && inputs.helm_release_name != ''
+        run: |
+          echo "Rolling back Helm release: ${{ inputs.helm_release_name }}"
+          
+          NAMESPACE="${{ inputs.namespace }}"
+          RELEASE="${{ inputs.helm_release_name }}"
+          REVISION="${{ inputs.revision }}"
+          
+          # Get current revision
+          CURRENT=$(helm history "$RELEASE" -n "$NAMESPACE" -o json | jq -r '.[-1].revision')
+          echo "Current revision: $CURRENT"
+          
+          # Determine target revision
+          if [[ "$REVISION" == "0" ]]; then
+            TARGET=$((CURRENT - 1))
+          else
+            TARGET="$REVISION"
+          fi
+          
+          echo "Rolling back to revision: $TARGET"
+          
+          # Perform rollback
+          helm rollback "$RELEASE" "$TARGET" -n "$NAMESPACE" --wait --timeout 5m || {
+            echo "::error::Helm rollback failed"
+            echo "status=failed" >> $GITHUB_OUTPUT
+            exit 1
+          }
+          
+          echo "Rollback completed successfully"
+          echo "revision=$TARGET" >> $GITHUB_OUTPUT
+          echo "status=success" >> $GITHUB_OUTPUT
+
+      # -------------------------------------------------------------------------
+      # KUBERNETES NATIVE ROLLBACK (if no Helm)
+      # -------------------------------------------------------------------------
+      - name: Kubernetes Rollback
+        if: inputs.deployment_target == 'eks' && inputs.helm_release_name == ''
+        run: |
+          echo "Rolling back Kubernetes deployment"
+          
+          NAMESPACE="${{ inputs.namespace }}"
+          
+          # Get deployments in namespace
+          DEPLOYMENTS=$(kubectl get deployments -n "$NAMESPACE" -o jsonpath='{.items[*].metadata.name}')
+          
+          for DEPLOY in $DEPLOYMENTS; do
+            echo "Rolling back deployment: $DEPLOY"
+            kubectl rollout undo deployment/"$DEPLOY" -n "$NAMESPACE" || {
+              echo "::warning::Failed to rollback $DEPLOY"
+            }
+          done
+          
+          # Wait for rollout
+          for DEPLOY in $DEPLOYMENTS; do
+            kubectl rollout status deployment/"$DEPLOY" -n "$NAMESPACE" --timeout=5m || true
+          done
+          
+          echo "Kubernetes rollback completed"
+
+      # -------------------------------------------------------------------------
+      # EC2 ROLLBACK
+      # -------------------------------------------------------------------------
+      - name: EC2 Rollback
+        id: ec2_rollback
+        if: inputs.deployment_target == 'ec2'
+        run: |
+          echo "Preparing EC2 rollback..."
+          
+          PARAM_NAME="/deployments/${{ inputs.environment }}/ec2/previous_image"
+          
+          echo "Retrieving previous image from: $PARAM_NAME"
+          
+          PREVIOUS_IMAGE=$(aws ssm get-parameter \
+            --name "$PARAM_NAME" \
+            --query 'Parameter.Value' \
+            --output text 2>/dev/null || echo "")
+          
+          if [[ -z "$PREVIOUS_IMAGE" ]]; then
+            echo "::error::No previous image found in SSM Parameter Store"
+            echo "status=failed" >> $GITHUB_OUTPUT
+            exit 1
+          fi
+          
+          echo "Found previous image: $PREVIOUS_IMAGE"
+          
+          # Output for orchestrator to use
+          echo "rollback_image_uri=$PREVIOUS_IMAGE" >> $GITHUB_OUTPUT
+          echo "status=success" >> $GITHUB_OUTPUT
+          
+          echo "Rollback preparation complete. Orchestrator will trigger redeployment."
+
+      # -------------------------------------------------------------------------
+      # ECS ROLLBACK
+      # -------------------------------------------------------------------------
+      - name: ECS Rollback
+        id: ecs_rollback
+        if: inputs.deployment_target == 'ecs'
+        run: |
+          echo "Rolling back ECS service..."
+          
+          CLUSTER="${{ inputs.cluster_name }}"
+          SERVICE="${{ inputs.service_name }}"
+          TASK_FAMILY="${{ inputs.task_definition_family }}"
+          
+          if [[ -z "$CLUSTER" || -z "$SERVICE" || -z "$TASK_FAMILY" ]]; then
+            echo "::error::ECS rollback requires cluster_name, service_name, and task_definition_family"
+            echo "status=failed" >> $GITHUB_OUTPUT
+            exit 1
+          fi
+          
+          echo "Cluster: $CLUSTER"
+          echo "Service: $SERVICE"
+          echo "Task Family: $TASK_FAMILY"
+          
+          # Get current and previous task definitions
+          TASK_ARNS=$(aws ecs list-task-definitions \
+            --family-prefix "$TASK_FAMILY" \
+            --sort DESC \
+            --max-items 5 \
+            --query 'taskDefinitionArns' \
+            --output json)
+          
+          CURRENT_TASK=$(echo "$TASK_ARNS" | jq -r '.[0]')
+          PREVIOUS_TASK=$(echo "$TASK_ARNS" | jq -r '.[1]')
+          
+          echo "Current task definition: $CURRENT_TASK"
+          echo "Rolling back to: $PREVIOUS_TASK"
+          
+          if [[ -z "$PREVIOUS_TASK" || "$PREVIOUS_TASK" == "null" ]]; then
+            echo "::error::No previous task definition found for rollback"
+            echo "status=failed" >> $GITHUB_OUTPUT
+            exit 1
+          fi
+          
+          # Update service to use previous task definition
+          aws ecs update-service \
+            --cluster "$CLUSTER" \
+            --service "$SERVICE" \
+            --task-definition "$PREVIOUS_TASK" \
+            --force-new-deployment || {
+            echo "::error::Failed to update ECS service"
+            echo "status=failed" >> $GITHUB_OUTPUT
+            exit 1
+          }
+          
+          echo "Waiting for service stability..."
+          aws ecs wait services-stable \
+            --cluster "$CLUSTER" \
+            --services "$SERVICE" || {
+            echo "::warning::Service did not stabilize within timeout"
+          }
+          
+          # Extract revision from ARN
+          REVISION=$(echo "$PREVIOUS_TASK" | grep -oP ':\K[0-9]+$')
+          echo "revision=$REVISION" >> $GITHUB_OUTPUT
+          echo "status=success" >> $GITHUB_OUTPUT
+          echo "ECS rollback completed"
+
+      - name: Set Result
+        id: result
+        if: always()
+        run: |
+          # Check all rollback step outputs
+          if [[ "${{ steps.rollback.outputs.status }}" == "success" ]] || \
+             [[ "${{ steps.ecs_rollback.outputs.status }}" == "success" ]] || \
+             [[ "${{ steps.ec2_rollback.outputs.status }}" == "success" ]]; then
+            echo "status=success" >> $GITHUB_OUTPUT
+          else
+            echo "status=failed" >> $GITHUB_OUTPUT
+          fi
+
+      - name: Generate Summary
+        if: always()
+        run: |
+          echo "## Rollback Summary" >> $GITHUB_STEP_SUMMARY
+          echo "" >> $GITHUB_STEP_SUMMARY
+          echo "| Property | Value |" >> $GITHUB_STEP_SUMMARY
+          echo "|----------|-------|" >> $GITHUB_STEP_SUMMARY
+          echo "| Environment | ${{ inputs.environment }} |" >> $GITHUB_STEP_SUMMARY
+          echo "| Target | ${{ inputs.deployment_target }} |" >> $GITHUB_STEP_SUMMARY
+          echo "| Namespace | ${{ inputs.namespace }} |" >> $GITHUB_STEP_SUMMARY
+          echo "| Helm Release | ${{ inputs.helm_release_name }} |" >> $GITHUB_STEP_SUMMARY
+          echo "| Rolled Back To | ${{ steps.rollback.outputs.revision }} |" >> $GITHUB_STEP_SUMMARY
+          echo "" >> $GITHUB_STEP_SUMMARY
+          
+          if [[ "${{ steps.result.outputs.status }}" == "success" ]]; then
+            echo "### Rollback: **SUCCESS**" >> $GITHUB_STEP_SUMMARY
+          else
+            echo "### Rollback: **FAILED**" >> $GITHUB_STEP_SUMMARY
+          fi

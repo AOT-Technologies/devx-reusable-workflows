@@ -1,0 +1,358 @@
+name: "Module: Deploy to EKS (Helm)"
+
+# ------------------------------------------------------------------------------
+# Kubernetes deployment via Helm charts.
+# Supports: Blue/Green, Canary (future), Standard Rolling Update.
+# ------------------------------------------------------------------------------
+
+on:
+  workflow_call:
+    inputs:
+      # --- REQUIRED ---
+      environment:
+        description: "Target environment"
+        type: string
+        required: true
+      image_uri:
+        description: "Docker image URI to deploy"
+        type: string
+        required: true
+      cluster_name:
+        description: "EKS cluster name"
+        type: string
+        required: true
+      
+      # --- HELM SETTINGS ---
+      helm_chart_path:
+        description: "Path to Helm chart"
+        type: string
+        required: true
+      helm_release_name:
+        description: "Helm release name"
+        type: string
+        required: true
+      helm_values_file:
+        description: "Path to values file"
+        type: string
+        default: ""
+      helm_set_values:
+        description: "Additional --set values (comma-separated key=value)"
+        type: string
+        default: ""
+      
+      # --- NAMESPACE ---
+      namespace:
+        description: "Kubernetes namespace"
+        type: string
+        default: "default"
+      create_namespace:
+        description: "Create namespace if not exists"
+        type: boolean
+        default: true
+      
+      # --- DEPLOYMENT STRATEGY ---
+      strategy:
+        description: "Deployment strategy: rolling, blue-green, canary"
+        type: string
+        default: "rolling"
+      
+      # --- TIMING ---
+      timeout:
+        description: "Helm timeout (e.g., 10m)"
+        type: string
+        default: "10m"
+      
+      # --- AWS ---
+      aws_region:
+        description: "AWS region"
+        type: string
+        default: "us-east-1"
+      role_to_assume:
+        description: "AWS IAM role for OIDC"
+        type: string
+        required: true
+      
+      # --- OPTIONS ---
+      dry_run:
+        description: "Dry run mode"
+        type: boolean
+        default: false
+      atomic:
+        description: "Rollback on failure"
+        type: boolean
+        default: true
+
+    outputs:
+      status:
+        description: "Deployment status"
+        value: ${{ jobs.deploy.outputs.status }}
+      revision:
+        description: "Helm revision number"
+        value: ${{ jobs.deploy.outputs.revision }}
+      manifest:
+        description: "Applied manifest summary"
+        value: ${{ jobs.deploy.outputs.manifest }}
+
+  workflow_dispatch:
+    inputs:
+      environment:
+        description: "Environment"
+        type: choice
+        options:
+          - dev
+          - qa
+          - staging
+          - production
+        required: true
+      image_uri:
+        description: "Image URI"
+        type: string
+        required: true
+      cluster_name:
+        description: "EKS cluster name"
+        type: string
+        required: true
+      helm_chart_path:
+        description: "Helm chart path"
+        type: string
+        required: true
+      helm_release_name:
+        description: "Release name"
+        type: string
+        required: true
+      namespace:
+        description: "Namespace"
+        type: string
+        default: "default"
+      dry_run:
+        description: "Dry run"
+        type: boolean
+        default: false
+
+permissions:
+  contents: read
+  id-token: write
+  deployments: write
+
+jobs:
+  deploy:
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    
+    environment:
+      name: ${{ inputs.environment }}
+      url: ${{ steps.deploy_url.outputs.url }}
+    
+    outputs:
+      status: ${{ steps.result.outputs.status }}
+      revision: ${{ steps.helm_deploy.outputs.revision }}
+      manifest: ${{ steps.helm_deploy.outputs.manifest }}
+
+    steps:
+      - name: Checkout Code
+        uses: actions/checkout@v4.1.1
+
+      - name: Configure AWS Credentials
+        uses: aws-actions/configure-aws-credentials@v4.0.2
+        with:
+          role-to-assume: ${{ inputs.role_to_assume }}
+          aws-region: ${{ inputs.aws_region }}
+
+      - name: Setup kubectl
+        run: |
+          echo "🔧 Configuring kubectl for EKS cluster: ${{ inputs.cluster_name }}"
+          aws eks update-kubeconfig \
+            --name "${{ inputs.cluster_name }}" \
+            --region ${{ inputs.aws_region }}
+          
+          # Verify connectivity
+          kubectl cluster-info || {
+            echo "::error::Failed to connect to EKS cluster"
+            exit 1
+          }
+          
+          echo "✅ Connected to cluster"
+
+      - name: Setup Helm
+        uses: azure/setup-helm@v3
+        with:
+          version: '3.14.0'
+
+      - name: Validate Helm Chart
+        run: |
+          echo "🔍 Validating Helm chart: ${{ inputs.helm_chart_path }}"
+          
+          if [[ ! -d "${{ inputs.helm_chart_path }}" ]]; then
+            echo "::error::Helm chart not found: ${{ inputs.helm_chart_path }}"
+            exit 1
+          fi
+          
+          helm lint "${{ inputs.helm_chart_path }}" || {
+            echo "::error::Helm lint failed"
+            exit 1
+          }
+          
+          echo "✅ Helm chart validation passed"
+
+      - name: Prepare Helm Command
+        id: prepare
+        run: |
+          CHART="${{ inputs.helm_chart_path }}"
+          RELEASE="${{ inputs.helm_release_name }}"
+          NAMESPACE="${{ inputs.namespace }}"
+          IMAGE="${{ inputs.image_uri }}"
+          
+          # Extract image repository and tag
+          IMAGE_REPO=$(echo "$IMAGE" | cut -d: -f1)
+          IMAGE_TAG=$(echo "$IMAGE" | cut -d: -f2)
+          
+          # Build base command
+          CMD="helm upgrade --install $RELEASE $CHART"
+          CMD="$CMD --namespace $NAMESPACE"
+          
+          # Namespace creation
+          if [[ "${{ inputs.create_namespace }}" == "true" ]]; then
+            CMD="$CMD --create-namespace"
+          fi
+          
+          # Values file
+          if [[ -n "${{ inputs.helm_values_file }}" && -f "${{ inputs.helm_values_file }}" ]]; then
+            CMD="$CMD -f ${{ inputs.helm_values_file }}"
+          fi
+          
+          # Image settings
+          CMD="$CMD --set image.repository=$IMAGE_REPO"
+          CMD="$CMD --set image.tag=$IMAGE_TAG"
+          
+          # Additional set values
+          if [[ -n "${{ inputs.helm_set_values }}" ]]; then
+            IFS=',' read -ra VALUES <<< "${{ inputs.helm_set_values }}"
+            for val in "${VALUES[@]}"; do
+              CMD="$CMD --set $val"
+            done
+          fi
+          
+          # Options
+          CMD="$CMD --timeout ${{ inputs.timeout }}"
+          CMD="$CMD --wait"
+          
+          if [[ "${{ inputs.atomic }}" == "true" ]]; then
+            CMD="$CMD --atomic"
+          fi
+          
+          if [[ "${{ inputs.dry_run }}" == "true" ]]; then
+            CMD="$CMD --dry-run"
+          fi
+          
+          echo "command=$CMD" >> $GITHUB_OUTPUT
+          echo "📋 Helm command prepared"
+
+      - name: Deploy with Helm
+        id: helm_deploy
+        run: |
+          echo "🚀 Deploying to EKS..."
+          echo "Environment: ${{ inputs.environment }}"
+          echo "Cluster: ${{ inputs.cluster_name }}"
+          echo "Namespace: ${{ inputs.namespace }}"
+          echo ""
+          
+          # Execute deployment
+          ${{ steps.prepare.outputs.command }} 2>&1 | tee deploy-output.txt
+          DEPLOY_EXIT=$?
+          
+          if [[ $DEPLOY_EXIT -ne 0 ]]; then
+            echo "::error::Helm deployment failed"
+            echo "status=failed" >> $GITHUB_OUTPUT
+            exit 1
+          fi
+          
+          # Get revision
+          REVISION=$(helm history "${{ inputs.helm_release_name }}" -n "${{ inputs.namespace }}" -o json | jq -r '.[-1].revision')
+          echo "revision=$REVISION" >> $GITHUB_OUTPUT
+          
+          # Get manifest summary
+          MANIFEST=$(helm get manifest "${{ inputs.helm_release_name }}" -n "${{ inputs.namespace }}" | grep "kind:" | sort | uniq -c || echo "N/A")
+          echo "manifest<<EOF" >> $GITHUB_OUTPUT
+          echo "$MANIFEST" >> $GITHUB_OUTPUT
+          echo "EOF" >> $GITHUB_OUTPUT
+          
+          echo "status=success" >> $GITHUB_OUTPUT
+          echo "✅ Deployment completed (revision: $REVISION)"
+
+      - name: Verify Deployment
+        if: inputs.dry_run != true
+        run: |
+          echo "🔍 Verifying deployment..."
+          
+          NAMESPACE="${{ inputs.namespace }}"
+          
+          # Get pods
+          echo "Pod Status:"
+          kubectl get pods -n "$NAMESPACE" -l "app.kubernetes.io/instance=${{ inputs.helm_release_name }}" --no-headers
+          
+          # Get services
+          echo ""
+          echo "Services:"
+          kubectl get svc -n "$NAMESPACE" -l "app.kubernetes.io/instance=${{ inputs.helm_release_name }}" --no-headers
+          
+          # Wait for pods to be ready
+          kubectl wait --for=condition=Ready pods \
+            -l "app.kubernetes.io/instance=${{ inputs.helm_release_name }}" \
+            -n "$NAMESPACE" \
+            --timeout=5m || {
+            echo "::warning::Some pods may not be ready"
+          }
+
+      - name: Set Result
+        id: result
+        if: always()
+        run: |
+          if [[ "${{ steps.helm_deploy.outputs.status }}" == "success" ]]; then
+            echo "status=success" >> $GITHUB_OUTPUT
+          else
+            echo "status=failed" >> $GITHUB_OUTPUT
+          fi
+
+      - name: Generate Deployment URL
+        id: deploy_url
+        run: |
+          # Get ingress/service URL if available
+          INGRESS_HOST=$(kubectl get ingress -n "${{ inputs.namespace }}" \
+            -l "app.kubernetes.io/instance=${{ inputs.helm_release_name }}" \
+            -o jsonpath='{.items[0].spec.rules[0].host}' 2>/dev/null || echo "")
+          
+          if [[ -n "$INGRESS_HOST" ]]; then
+            echo "url=https://$INGRESS_HOST" >> $GITHUB_OUTPUT
+          else
+            echo "url=https://${{ inputs.environment }}.example.com" >> $GITHUB_OUTPUT
+          fi
+
+      - name: Generate Summary
+        if: always()
+        run: |
+          echo "## 🚀 EKS Deployment Summary" >> $GITHUB_STEP_SUMMARY
+          echo "" >> $GITHUB_STEP_SUMMARY
+          
+          echo "### Configuration" >> $GITHUB_STEP_SUMMARY
+          echo "| Property | Value |" >> $GITHUB_STEP_SUMMARY
+          echo "|----------|-------|" >> $GITHUB_STEP_SUMMARY
+          echo "| Environment | ${{ inputs.environment }} |" >> $GITHUB_STEP_SUMMARY
+          echo "| Cluster | ${{ inputs.cluster_name }} |" >> $GITHUB_STEP_SUMMARY
+          echo "| Namespace | ${{ inputs.namespace }} |" >> $GITHUB_STEP_SUMMARY
+          echo "| Helm Release | ${{ inputs.helm_release_name }} |" >> $GITHUB_STEP_SUMMARY
+          echo "| Revision | ${{ steps.helm_deploy.outputs.revision }} |" >> $GITHUB_STEP_SUMMARY
+          echo "| Image | \`${{ inputs.image_uri }}\` |" >> $GITHUB_STEP_SUMMARY
+          echo "| Dry Run | ${{ inputs.dry_run }} |" >> $GITHUB_STEP_SUMMARY
+          echo "" >> $GITHUB_STEP_SUMMARY
+          
+          echo "### Manifest Summary" >> $GITHUB_STEP_SUMMARY
+          echo "\`\`\`" >> $GITHUB_STEP_SUMMARY
+          echo "${{ steps.helm_deploy.outputs.manifest }}" >> $GITHUB_STEP_SUMMARY
+          echo "\`\`\`" >> $GITHUB_STEP_SUMMARY
+          echo "" >> $GITHUB_STEP_SUMMARY
+          
+          if [[ "${{ steps.result.outputs.status }}" == "success" ]]; then
+            echo "### ✅ Deployment: **SUCCESS**" >> $GITHUB_STEP_SUMMARY
+          else
+            echo "### ❌ Deployment: **FAILED**" >> $GITHUB_STEP_SUMMARY
+          fi

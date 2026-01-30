@@ -1,0 +1,502 @@
+name: "Module: Deploy to EC2 (SSM/SSH)"
+
+# ------------------------------------------------------------------------------
+# EC2 deployment via AWS SSM or SSH.
+# User can select deployment method: 'ssm' (default) or 'ssh'
+# 
+# SSM: Uses AWS Systems Manager (no SSH keys needed, IAM-based)
+# SSH: Direct SSH connection (requires SSH_PRIVATE_KEY secret)
+# ------------------------------------------------------------------------------
+
+on:
+  workflow_call:
+    inputs:
+      environment:
+        description: "Target environment"
+        type: string
+        required: true
+      image_uri:
+        description: "Docker image URI"
+        type: string
+        required: true
+      
+      # Deployment method selection
+      deploy_method:
+        description: "Deployment method: ssm or ssh"
+        type: string
+        default: "ssm"
+      
+      # Target selection
+      target_type:
+        description: "Target type: instance-ids, tag, asg"
+        type: string
+        default: "tag"
+      instance_ids:
+        description: "EC2 instance IDs (comma-separated)"
+        type: string
+        default: ""
+      target_tag_key:
+        description: "Tag key for targeting (e.g., Environment)"
+        type: string
+        default: "Environment"
+      target_tag_value:
+        description: "Tag value for targeting"
+        type: string
+        default: ""
+      asg_name:
+        description: "Auto Scaling Group name"
+        type: string
+        default: ""
+      
+      # SSH-specific settings
+      ssh_user:
+        description: "SSH username (for SSH method)"
+        type: string
+        default: "ec2-user"
+      ssh_port:
+        description: "SSH port"
+        type: number
+        default: 22
+      
+      # Deployment settings
+      docker_compose_path:
+        description: "Path to docker-compose file on EC2"
+        type: string
+        default: "/app/docker-compose.yaml"
+      service_name:
+        description: "Service name in docker-compose"
+        type: string
+        default: "app"
+      
+      # AWS
+      aws_region:
+        description: "AWS region"
+        type: string
+        default: "us-east-1"
+      role_to_assume:
+        description: "AWS IAM role for OIDC"
+        type: string
+        required: true
+    
+    secrets:
+      SSH_PRIVATE_KEY:
+        description: "SSH private key (required for SSH method)"
+        required: false
+
+    outputs:
+      status:
+        description: "Deployment status"
+        value: ${{ jobs.deploy.outputs.status }}
+      instances_updated:
+        description: "Number of instances updated"
+        value: ${{ jobs.deploy.outputs.count }}
+      url:
+        description: "Deployment URL"
+        value: ${{ jobs.deploy.outputs.url }}
+
+  workflow_dispatch:
+    inputs:
+      environment:
+        description: "Environment"
+        type: choice
+        options:
+          - dev
+          - qa
+          - staging
+          - production
+        required: true
+      image_uri:
+        description: "Docker image URI"
+        type: string
+        required: true
+      deploy_method:
+        description: "Deployment method"
+        type: choice
+        options:
+          - ssm
+          - ssh
+        default: "ssm"
+      target_type:
+        description: "Target type"
+        type: choice
+        options:
+          - instance-ids
+          - tag
+          - asg
+        default: "tag"
+      target_tag_key:
+        description: "Tag key"
+        type: string
+        default: "Environment"
+      target_tag_value:
+        description: "Tag value"
+        type: string
+        required: true
+
+permissions:
+  contents: read
+  id-token: write
+
+jobs:
+  deploy:
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    
+    environment:
+      name: ${{ inputs.environment }}
+    
+    outputs:
+      status: ${{ steps.result.outputs.status }}
+      count: ${{ steps.targets.outputs.count }}
+      url: ${{ steps.result.outputs.url }}
+
+    steps:
+      - name: Validate Inputs
+        run: |
+          # Security: Validate image URI format to prevent injection
+          if [[ ! "${{ inputs.image_uri }}" =~ ^[a-zA-Z0-9._\-/:@]+$ ]]; then
+            echo "::error::Invalid image_uri format. Possible injection attempt."
+            exit 1
+          fi
+          
+          # Validate deploy method
+          if [[ ! "${{ inputs.deploy_method }}" =~ ^(ssm|ssh)$ ]]; then
+            echo "::error::Invalid deploy_method: ${{ inputs.deploy_method }}"
+            echo "::error::Must be 'ssm' or 'ssh'"
+            exit 1
+          fi
+          
+          # If SSH, check that we have SSH key
+          if [[ "${{ inputs.deploy_method }}" == "ssh" ]] && [[ -z "${{ secrets.SSH_PRIVATE_KEY }}" ]]; then
+            echo "::warning::SSH method selected but SSH_PRIVATE_KEY secret not set"
+          fi
+          
+          echo "Input validation passed"
+
+      - name: Configure AWS Credentials
+        uses: aws-actions/configure-aws-credentials@v4.0.2
+        with:
+          role-to-assume: ${{ inputs.role_to_assume }}
+          aws-region: ${{ inputs.aws_region }}
+
+      - name: Login to ECR
+        id: ecr_login
+        uses: aws-actions/amazon-ecr-login@v2
+        with:
+          mask-password: true
+
+      - name: Determine Target Instances
+        id: targets
+        run: |
+          TARGET_TYPE="${{ inputs.target_type }}"
+          
+          case "$TARGET_TYPE" in
+            instance-ids)
+              INSTANCES="${{ inputs.instance_ids }}"
+              ;;
+            tag)
+              echo "Finding instances with tag: ${{ inputs.target_tag_key }}=${{ inputs.target_tag_value }}"
+              INSTANCES=$(aws ec2 describe-instances \
+                --filters "Name=tag:${{ inputs.target_tag_key }},Values=${{ inputs.target_tag_value }}" \
+                          "Name=instance-state-name,Values=running" \
+                --query 'Reservations[*].Instances[*].InstanceId' \
+                --output text | tr '\t' ',')
+              ;;
+            asg)
+              echo "Finding instances in ASG: ${{ inputs.asg_name }}"
+              INSTANCES=$(aws autoscaling describe-auto-scaling-groups \
+                --auto-scaling-group-names "${{ inputs.asg_name }}" \
+                --query 'AutoScalingGroups[0].Instances[*].InstanceId' \
+                --output text | tr '\t' ',')
+              ;;
+          esac
+          
+          if [[ -z "$INSTANCES" ]]; then
+            echo "::error::No target instances found"
+            exit 1
+          fi
+          
+          echo "Target instances: $INSTANCES"
+          echo "instances=$INSTANCES" >> $GITHUB_OUTPUT
+          
+          # Count instances
+          COUNT=$(echo "$INSTANCES" | tr ',' '\n' | grep -c . || echo "0")
+          echo "count=$COUNT" >> $GITHUB_OUTPUT
+          
+          # Get IPs for SSH method
+          if [[ "${{ inputs.deploy_method }}" == "ssh" ]]; then
+            FIRST_INSTANCE=$(echo "$INSTANCES" | cut -d',' -f1)
+            PUBLIC_IP=$(aws ec2 describe-instances \
+              --instance-ids "$FIRST_INSTANCE" \
+              --query 'Reservations[0].Instances[0].PublicIpAddress' \
+              --output text)
+            echo "public_ip=$PUBLIC_IP" >> $GITHUB_OUTPUT
+            
+            # Get all IPs
+            IPS=""
+            for INSTANCE in $(echo "$INSTANCES" | tr ',' ' '); do
+              IP=$(aws ec2 describe-instances \
+                --instance-ids "$INSTANCE" \
+                --query 'Reservations[0].Instances[0].PublicIpAddress' \
+                --output text)
+              IPS="${IPS}${IP},"
+            done
+            echo "public_ips=${IPS%,}" >> $GITHUB_OUTPUT
+          fi
+
+      # =========================================================================
+      # SSM DEPLOYMENT METHOD
+      # =========================================================================
+      - name: Deploy via SSM
+        id: ssm_deploy
+        if: inputs.deploy_method == 'ssm'
+        env:
+          # Pass variables as environment variables for safe interpolation
+          IMAGE_URI: ${{ inputs.image_uri }}
+          SERVICE_NAME: ${{ inputs.service_name }}
+          COMPOSE_PATH: ${{ inputs.docker_compose_path }}
+          AWS_REGION: ${{ inputs.aws_region }}
+        run: |
+          echo "Deploying to EC2 instances via SSM..."
+          
+          INSTANCES="${{ steps.targets.outputs.instances }}"
+          
+          # Build deployment script with proper variable escaping
+          # Using heredoc with single quotes to prevent shell expansion
+          read -r -d '' DEPLOY_SCRIPT << 'SCRIPT_END' || true
+          #!/bin/bash
+          set -euo pipefail
+          
+          IMAGE="$1"
+          SERVICE="$2"
+          COMPOSE_PATH="$3"
+          REGION="$4"
+          
+          echo "Starting deployment on $(hostname)"
+          echo "Image: $IMAGE"
+          echo "Service: $SERVICE"
+          
+          # Validate image format (security check)
+          if [[ ! "$IMAGE" =~ ^[a-zA-Z0-9._\-/:@]+$ ]]; then
+            echo "ERROR: Invalid image format"
+            exit 1
+          fi
+          
+          # Login to ECR
+          REGISTRY=$(echo "$IMAGE" | cut -d/ -f1)
+          aws ecr get-login-password --region "$REGION" | \
+            docker login --username AWS --password-stdin "$REGISTRY"
+          
+          # Pull new image
+          docker pull "$IMAGE"
+          
+          # Stop and restart with docker-compose
+          cd "$(dirname "$COMPOSE_PATH")"
+          
+          # Update image in compose file using Docker Compose override
+          echo "version: '3'" > docker-compose.override.yml
+          echo "services:" >> docker-compose.override.yml
+          echo "  $SERVICE:" >> docker-compose.override.yml
+          echo "    image: $IMAGE" >> docker-compose.override.yml
+          
+          # Restart service
+          docker-compose -f "$COMPOSE_PATH" -f docker-compose.override.yml pull "$SERVICE" || true
+          docker-compose -f "$COMPOSE_PATH" -f docker-compose.override.yml up -d "$SERVICE"
+          
+          # Cleanup old images
+          docker image prune -f
+          
+          echo "Deployment complete on $(hostname)"
+          SCRIPT_END
+          
+          # Base64 encode the script to safely pass it
+          ENCODED_SCRIPT=$(echo "$DEPLOY_SCRIPT" | base64 -w 0)
+          
+          # Build SSM command that decodes and runs the script
+          SSM_COMMAND="echo '$ENCODED_SCRIPT' | base64 -d > /tmp/deploy.sh && chmod +x /tmp/deploy.sh && /tmp/deploy.sh '$IMAGE_URI' '$SERVICE_NAME' '$COMPOSE_PATH' '$AWS_REGION'"
+          
+          # Send SSM command
+          COMMAND_ID=$(aws ssm send-command \
+            --document-name "AWS-RunShellScript" \
+            --targets "Key=instanceids,Values=$INSTANCES" \
+            --parameters "{\"commands\":[\"$SSM_COMMAND\"],\"executionTimeout\":[\"600\"]}" \
+            --comment "Deploy ${{ inputs.environment }}: ${IMAGE_URI##*/}" \
+            --timeout-seconds 600 \
+            --output text \
+            --query 'Command.CommandId')
+          
+          echo "SSM Command ID: $COMMAND_ID"
+          
+          # Wait for completion on first instance
+          FIRST_INSTANCE=$(echo "$INSTANCES" | cut -d',' -f1)
+          echo "Waiting for command to complete on $FIRST_INSTANCE..."
+          
+          for i in {1..60}; do
+            STATUS=$(aws ssm get-command-invocation \
+              --command-id "$COMMAND_ID" \
+              --instance-id "$FIRST_INSTANCE" \
+              --query 'Status' \
+              --output text 2>/dev/null || echo "Pending")
+            
+            echo "Status: $STATUS"
+            
+            if [[ "$STATUS" == "Success" ]]; then
+              echo "Deployment successful"
+              break
+            elif [[ "$STATUS" == "Failed" || "$STATUS" == "TimedOut" || "$STATUS" == "Cancelled" ]]; then
+              echo "::error::Deployment failed with status: $STATUS"
+              
+              # Get failure details
+              aws ssm get-command-invocation \
+                --command-id "$COMMAND_ID" \
+                --instance-id "$FIRST_INSTANCE" \
+                --query 'StandardErrorContent' \
+                --output text || true
+              
+              exit 1
+            fi
+            
+            sleep 10
+          done
+          
+          echo "status=success" >> $GITHUB_OUTPUT
+
+      # =========================================================================
+      # SSH DEPLOYMENT METHOD
+      # =========================================================================
+      - name: Setup SSH Key
+        if: inputs.deploy_method == 'ssh'
+        run: |
+          mkdir -p ~/.ssh
+          echo "${{ secrets.SSH_PRIVATE_KEY }}" > ~/.ssh/deploy_key
+          chmod 600 ~/.ssh/deploy_key
+          
+          # Add target hosts to known_hosts (disable strict checking for automation)
+          echo "StrictHostKeyChecking no" >> ~/.ssh/config
+          echo "UserKnownHostsFile /dev/null" >> ~/.ssh/config
+          chmod 600 ~/.ssh/config
+
+      - name: Deploy via SSH
+        id: ssh_deploy
+        if: inputs.deploy_method == 'ssh'
+        env:
+          IMAGE_URI: ${{ inputs.image_uri }}
+          SERVICE_NAME: ${{ inputs.service_name }}
+          COMPOSE_PATH: ${{ inputs.docker_compose_path }}
+          AWS_REGION: ${{ inputs.aws_region }}
+        run: |
+          echo "Deploying to EC2 instances via SSH..."
+          
+          SSH_USER="${{ inputs.ssh_user }}"
+          SSH_PORT="${{ inputs.ssh_port }}"
+          PUBLIC_IPS="${{ steps.targets.outputs.public_ips }}"
+          
+          # Create deployment script
+          cat > /tmp/deploy.sh << 'SCRIPT_END'
+          #!/bin/bash
+          set -euo pipefail
+          
+          IMAGE="$1"
+          SERVICE="$2"
+          COMPOSE_PATH="$3"
+          REGION="$4"
+          
+          echo "Starting deployment on $(hostname)"
+          
+          # Validate image format
+          if [[ ! "$IMAGE" =~ ^[a-zA-Z0-9._\-/:@]+$ ]]; then
+            echo "ERROR: Invalid image format"
+            exit 1
+          fi
+          
+          # Login to ECR
+          REGISTRY=$(echo "$IMAGE" | cut -d/ -f1)
+          aws ecr get-login-password --region "$REGION" | \
+            docker login --username AWS --password-stdin "$REGISTRY"
+          
+          # Pull new image
+          docker pull "$IMAGE"
+          
+          # Update and restart with docker-compose
+          cd "$(dirname "$COMPOSE_PATH")"
+          
+          cat > docker-compose.override.yml << EOF
+          version: '3'
+          services:
+            $SERVICE:
+              image: $IMAGE
+          EOF
+          
+          docker-compose -f "$COMPOSE_PATH" -f docker-compose.override.yml up -d "$SERVICE"
+          
+          # Cleanup
+          docker image prune -f
+          
+          echo "Deployment complete"
+          SCRIPT_END
+          
+          FAILED=""
+          SUCCESS_COUNT=0
+          
+          # Deploy to each instance
+          for IP in $(echo "$PUBLIC_IPS" | tr ',' ' '); do
+            echo "Deploying to $IP..."
+            
+            # Copy and execute script
+            scp -i ~/.ssh/deploy_key -P "$SSH_PORT" /tmp/deploy.sh "${SSH_USER}@${IP}:/tmp/deploy.sh" && \
+            ssh -i ~/.ssh/deploy_key -p "$SSH_PORT" "${SSH_USER}@${IP}" \
+              "chmod +x /tmp/deploy.sh && /tmp/deploy.sh '$IMAGE_URI' '$SERVICE_NAME' '$COMPOSE_PATH' '$AWS_REGION'" && \
+            SUCCESS_COUNT=$((SUCCESS_COUNT + 1)) || {
+              echo "::warning::Deployment failed on $IP"
+              FAILED="${FAILED}${IP},"
+            }
+          done
+          
+          echo "Successful deployments: $SUCCESS_COUNT"
+          
+          if [[ -n "$FAILED" ]]; then
+            echo "::error::Some deployments failed: ${FAILED%,}"
+            exit 1
+          fi
+          
+          echo "status=success" >> $GITHUB_OUTPUT
+
+      - name: Cleanup SSH Key
+        if: always() && inputs.deploy_method == 'ssh'
+        run: |
+          rm -f ~/.ssh/deploy_key
+          rm -f ~/.ssh/config
+
+      - name: Set Result
+        id: result
+        if: always()
+        run: |
+          if [[ "${{ steps.ssm_deploy.outputs.status }}" == "success" ]] || \
+             [[ "${{ steps.ssh_deploy.outputs.status }}" == "success" ]]; then
+            echo "status=success" >> $GITHUB_OUTPUT
+          else
+            echo "status=failed" >> $GITHUB_OUTPUT
+          fi
+          
+          # Generate URL placeholder
+          echo "url=https://${{ inputs.environment }}.example.com" >> $GITHUB_OUTPUT
+
+      - name: Generate Summary
+        if: always()
+        run: |
+          echo "## EC2 Deployment Summary" >> $GITHUB_STEP_SUMMARY
+          echo "" >> $GITHUB_STEP_SUMMARY
+          echo "| Property | Value |" >> $GITHUB_STEP_SUMMARY
+          echo "|----------|-------|" >> $GITHUB_STEP_SUMMARY
+          echo "| Environment | ${{ inputs.environment }} |" >> $GITHUB_STEP_SUMMARY
+          echo "| Deploy Method | **${{ inputs.deploy_method }}** |" >> $GITHUB_STEP_SUMMARY
+          echo "| Target Type | ${{ inputs.target_type }} |" >> $GITHUB_STEP_SUMMARY
+          echo "| Instances Updated | ${{ steps.targets.outputs.count }} |" >> $GITHUB_STEP_SUMMARY
+          echo "| Image | \`${{ inputs.image_uri }}\` |" >> $GITHUB_STEP_SUMMARY
+          echo "" >> $GITHUB_STEP_SUMMARY
+          
+          if [[ "${{ steps.result.outputs.status }}" == "success" ]]; then
+            echo "### Deployment: **SUCCESS**" >> $GITHUB_STEP_SUMMARY
+          else
+            echo "### Deployment: **FAILED**" >> $GITHUB_STEP_SUMMARY
+          fi
