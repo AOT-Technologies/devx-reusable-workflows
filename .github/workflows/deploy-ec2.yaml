@@ -245,6 +245,54 @@ jobs:
           fi
 
       # =========================================================================
+      # STATE MEASUREMENT (For Rollback)
+      # =========================================================================
+      - name: Store Current State
+        id: save_state
+        continue-on-error: true
+        run: |
+          echo "Saving current state for rollback..."
+          
+          ENV="${{ inputs.environment }}"
+          PARAM_NAME="/deployments/$ENV/ec2/previous_image"
+          
+          # Get first instance ID for querying
+          FIRST_INSTANCE=$(echo "${{ steps.targets.outputs.instances }}" | cut -d',' -f1)
+          
+          CURRENT_IMAGE=""
+          
+          if [[ "${{ inputs.deploy_method }}" == "ssm" ]]; then
+             echo "Fetching image from $FIRST_INSTANCE via SSM..."
+             
+             # Command to get image from docker-compose file
+             # We use direct grep to avoid dependency on running containers or docker-compose command availability
+             CMD="grep 'image:' ${{ inputs.docker_compose_path }} | grep '${{ inputs.service_name }}' -A 1 | grep 'image:' | awk '{print \$2}' | tr -d '\"'"
+             
+             CURRENT_IMAGE=$(aws ssm send-command \
+               --document-name "AWS-RunShellScript" \
+               --targets "Key=instanceids,Values=$FIRST_INSTANCE" \
+               --parameters "commands=[\"$CMD\"]" \
+               --timeout-seconds 30 \
+               --query 'Command.CommandId' \
+               --output text | xargs -I {} aws ssm get-command-invocation --command-id {} --instance-id $FIRST_INSTANCE --query 'StandardOutputContent' --output text || echo "")
+          fi
+          
+          # Clean up
+          CURRENT_IMAGE=$(echo "$CURRENT_IMAGE" | tr -d '[:space:]')
+          
+          if [[ -n "$CURRENT_IMAGE" ]]; then
+            echo "Found current image: $CURRENT_IMAGE"
+            aws ssm put-parameter \
+              --name "$PARAM_NAME" \
+              --value "$CURRENT_IMAGE" \
+              --type String \
+              --overwrite \
+              --description "Previous image for $ENV rollback"
+          else
+            echo "::warning::Could not determine current image. Rollback will not be available."
+          fi
+
+      # =========================================================================
       # SSM DEPLOYMENT METHOD
       # =========================================================================
       - name: Deploy via SSM
