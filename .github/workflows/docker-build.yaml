@@ -6,9 +6,6 @@ name: "Module: Docker Build & Push (Universal)"
 # 1. 'ecr': Uses AWS OIDC (No keys). Requires 'role_to_assume'.
 # 2. 'generic': Uses Username/Password. Works with Docker Hub, GHCR.
 # 3. 'nexus': Uses Nexus Docker registry.
-#
-# NOTE: Artifact download from Nexus should be handled by the 
-# ci-orchestrator using nexus-download.yaml BEFORE calling this workflow.
 # ------------------------------------------------------------------------------
 
 on:

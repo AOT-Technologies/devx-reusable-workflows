@@ -1,7 +1,7 @@
 name: "Module: Python Build"
 # ------------------------------------------------------------------------------
-# Deterministic Python build with pip caching, unit tests, artifact upload.
-# Uploads directly to Nexus (enterprise mode) or GitHub Artifacts (legacy mode).
+# Python build with pip caching, unit tests, artifact upload.
+# Uploads directly to Nexus
 # ------------------------------------------------------------------------------
 
 on:

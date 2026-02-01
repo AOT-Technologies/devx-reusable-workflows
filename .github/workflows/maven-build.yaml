@@ -1,6 +1,6 @@
 name: "Module: Maven Build"
 # ------------------------------------------------------------------------------
-# Deterministic Maven build with Unit Tests (run before packaging).
+# Maven build with Unit Tests (run before packaging).
 # Uploads directly to Nexus.
 # ------------------------------------------------------------------------------
 

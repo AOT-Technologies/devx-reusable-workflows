@@ -1,6 +1,6 @@
 name: "Module: Node Build"
 # ------------------------------------------------------------------------------
-# Deterministic Node.js build with caching, unit tests, artifact upload.
+# Node.js build with caching, unit tests, artifact upload.
 # Uploads directly to Nexus
 # ------------------------------------------------------------------------------
 
