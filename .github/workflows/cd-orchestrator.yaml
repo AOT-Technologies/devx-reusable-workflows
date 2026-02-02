@@ -78,6 +78,7 @@ on:
           - qa
           - staging
           - production
+          - local
         required: true
       image_uri:
         description: "Docker image URI to deploy"
@@ -155,9 +156,9 @@ jobs:
           echo "Validating inputs..."
           
           # Validate environment value
-          if [[ ! "${{ inputs.environment }}" =~ ^(dev|qa|staging|production)$ ]]; then
+          if [[ ! "${{ inputs.environment }}" =~ ^(dev|qa|staging|production|local)$ ]]; then
             echo "::error::Invalid environment: ${{ inputs.environment }}"
-            echo "::error::Must be one of: dev, qa, staging, production"
+            echo "::error::Must be one of: dev, qa, staging, production, local"
             exit 1
           fi
           
