@@ -73,6 +73,15 @@ on:
         description: "AWS IAM role for OIDC"
         type: string
         default: ""
+      kubernetes_api_url:
+        description: "Kubernetes API URL (overrides EKS/local kubeconfig)"
+        type: string
+        default: ""
+
+    secrets:
+      KUBECONFIG_DATA:
+        description: "Base64-encoded kubeconfig for Kubernetes authentication"
+        required: false
 
     outputs:
       status:
@@ -123,15 +132,25 @@ jobs:
       details: ${{ steps.result.outputs.details }}
 
     steps:
+      - name: Setup kubeconfig from secret
+        if: inputs.check_type == 'k8s' && secrets.KUBECONFIG_DATA != ''
+        run: |
+          echo "Setting up kubeconfig from secret..."
+          mkdir -p $HOME/.kube
+          echo "${{ secrets.KUBECONFIG_DATA }}" | base64 -d > $HOME/.kube/config
+          chmod 600 $HOME/.kube/config
+          echo "Kubeconfig loaded successfully"
+          kubectl cluster-info || echo "Warning: Could not verify cluster connectivity"
+
       - name: Configure AWS Credentials
-        if: inputs.role_to_assume != ''
+        if: inputs.role_to_assume != '' && secrets.KUBECONFIG_DATA == ''
         uses: aws-actions/configure-aws-credentials@v4.0.2
         with:
           role-to-assume: ${{ inputs.role_to_assume }}
           aws-region: ${{ inputs.aws_region }}
 
-      - name: Setup kubectl
-        if: inputs.check_type == 'k8s' && inputs.cluster_name != ''
+      - name: Setup EKS kubectl
+        if: inputs.check_type == 'k8s' && inputs.cluster_name != '' && secrets.KUBECONFIG_DATA == ''
         run: |
           aws eks update-kubeconfig --name "${{ inputs.cluster_name }}" --region ${{ inputs.aws_region }}
           kubectl cluster-info
