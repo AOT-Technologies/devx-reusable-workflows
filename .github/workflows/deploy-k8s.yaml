@@ -1,0 +1,82 @@
+name: "Module: Deploy to K8s (Generic)"
+
+on:
+  workflow_call:
+    inputs:
+      environment:
+        description: "Target environment"
+        type: string
+        required: true
+      image_uri:
+        description: "Docker image URI to deploy"
+        type: string
+        required: true
+      helm_chart_path:
+        description: "Path to Helm chart"
+        type: string
+        required: true
+      helm_release_name:
+        description: "Helm release name"
+        type: string
+        required: true
+      namespace:
+        description: "Kubernetes namespace"
+        type: string
+        default: "default"
+      helm_set_values:
+        description: "Additional --set values"
+        type: string
+        default: ""
+      atomic:
+        description: "Rollback on failure"
+        type: boolean
+        default: true
+      timeout:
+        description: "Helm timeout"
+        type: string
+        default: "10m"
+    secrets:
+      KUBECONFIG_DATA:
+        description: "Base64 encoded kubeconfig"
+        required: true
+
+jobs:
+  deploy:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout Code
+        uses: actions/checkout@v4.1.1
+
+      - name: Setup kubectl
+        run: |
+          mkdir -p ~/.kube
+          echo "${{ secrets.KUBECONFIG_DATA }}" | base64 -d > ~/.kube/config
+          chmod 600 ~/.kube/config
+          kubectl cluster-info || { echo "::error::Kubeconfig invalid or cluster unreachable"; exit 1; }
+
+      - name: Setup Helm
+        uses: azure/setup-helm@v3
+        with:
+          version: '3.14.0'
+
+      - name: Deploy with Helm
+        run: |
+          IMAGE="${{ inputs.image_uri }}"
+          IMAGE_REPO=$(echo "$IMAGE" | cut -d: -f1)
+          IMAGE_TAG=$(echo "$IMAGE" | cut -d: -f2)
+          
+          CMD="helm upgrade --install ${{ inputs.helm_release_name }} ${{ inputs.helm_chart_path }} \
+            --namespace ${{ inputs.namespace }} --create-namespace \
+            --set image.repository=$IMAGE_REPO \
+            --set image.tag=$IMAGE_TAG \
+            --timeout ${{ inputs.timeout }} --wait"
+          
+          if [[ "${{ inputs.atomic }}" == "true" ]]; then CMD="$CMD --atomic"; fi
+          
+          if [[ -n "${{ inputs.helm_set_values }}" ]]; then
+            IFS=',' read -ra VALUES <<< "${{ inputs.helm_set_values }}"
+            for val in "${VALUES[@]}"; do CMD="$CMD --set $val"; done
+          fi
+          
+          echo "Executing: $CMD"
+          $CMD

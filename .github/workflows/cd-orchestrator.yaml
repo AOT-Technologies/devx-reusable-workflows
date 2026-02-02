@@ -209,9 +209,9 @@ jobs:
           
           # Validate deployment target
           TARGET=$(yq '.deployment.target // ""' ${{ inputs.config_path }})
-          if [[ ! "$TARGET" =~ ^(eks|ec2|ecs)$ ]]; then
+          if [[ ! "$TARGET" =~ ^(eks|ec2|ecs|k8s)$ ]]; then
             echo "::error::Invalid deployment target: $TARGET"
-            echo "::error::Must be one of: eks, ec2, ecs"
+            echo "::error::Must be one of: eks, ec2, ecs, k8s"
             exit 1
           fi
           
@@ -258,6 +258,18 @@ jobs:
               echo "helm_chart_path=$CHART" >> $GITHUB_OUTPUT
               echo "helm_release_name=$RELEASE" >> $GITHUB_OUTPUT
               echo "helm_values_file=$VALUES" >> $GITHUB_OUTPUT
+              echo "helm_set_values=$SET_VALUES" >> $GITHUB_OUTPUT
+              ;;
+            
+            k8s)
+              NAMESPACE=$(yq ".deployment.environments.$ENV.namespace // \"default\"" $CONFIG_FILE)
+              CHART=$(yq ".deployment.helm.chart_path // .deployment.environments.$ENV.helm.chart_path // \"\"" $CONFIG_FILE)
+              RELEASE=$(yq ".deployment.helm.release_name // .deployment.environments.$ENV.helm.release_name // \"\"" $CONFIG_FILE)
+              SET_VALUES=$(yq ".deployment.environments.$ENV.helm.set_values // \"\"" $CONFIG_FILE)
+              
+              echo "namespace=$NAMESPACE" >> $GITHUB_OUTPUT
+              echo "helm_chart_path=$CHART" >> $GITHUB_OUTPUT
+              echo "helm_release_name=$RELEASE" >> $GITHUB_OUTPUT
               echo "helm_set_values=$SET_VALUES" >> $GITHUB_OUTPUT
               ;;
             
@@ -399,14 +411,32 @@ jobs:
       force_new_deployment: true
       wait_for_stability: true
 
+  # GENERIC K8S DEPLOYMENT (via reusable module)
+  deploy-k8s:
+    needs: [validate-and-load, notify-start]
+    if: |
+      always() &&
+      needs.validate-and-load.result == 'success' &&
+      needs.validate-and-load.outputs.deployment_target == 'k8s'
+    uses: ./.github/workflows/deploy-k8s.yaml
+    secrets:
+      KUBECONFIG_DATA: ${{ secrets.KUBECONFIG_DATA }}
+    with:
+      environment: ${{ inputs.environment }}
+      image_uri: ${{ inputs.image_uri }}
+      helm_chart_path: ${{ needs.validate-and-load.outputs.helm_chart_path }}
+      helm_release_name: ${{ needs.validate-and-load.outputs.helm_release_name }}
+      namespace: ${{ needs.validate-and-load.outputs.namespace }}
+      helm_set_values: ${{ needs.validate-and-load.outputs.helm_set_values }}
+
   # ---------------------------------------------------------------------------
   # 4. HEALTH CHECK
   # ---------------------------------------------------------------------------
   health-check:
-    needs: [validate-and-load, deploy-eks, deploy-ec2, deploy-ecs]
+    needs: [validate-and-load, deploy-eks, deploy-ec2, deploy-ecs, deploy-k8s]
     if: |
       always() &&
-      (needs.deploy-eks.result == 'success' || needs.deploy-ec2.result == 'success' || needs.deploy-ecs.result == 'success') &&
+      (needs.deploy-eks.result == 'success' || needs.deploy-ec2.result == 'success' || needs.deploy-ecs.result == 'success' || needs.deploy-k8s.result == 'success') &&
       needs.validate-and-load.outputs.health_check_enabled == 'true' &&
       inputs.skip_health_check != true &&
       inputs.dry_run != true
@@ -518,6 +548,7 @@ jobs:
           echo "| EKS Deployment | ${{ needs.deploy-eks.result }} |" >> $GITHUB_STEP_SUMMARY
           echo "| EC2 Deployment | ${{ needs.deploy-ec2.result }} |" >> $GITHUB_STEP_SUMMARY
           echo "| ECS Deployment | ${{ needs.deploy-ecs.result }} |" >> $GITHUB_STEP_SUMMARY
+          echo "| K8s Deployment | ${{ needs.deploy-k8s.result }} |" >> $GITHUB_STEP_SUMMARY
           echo "| Health Check | ${{ needs.health-check.result }} |" >> $GITHUB_STEP_SUMMARY
           echo "| Rollback | ${{ needs.rollback.result }} |" >> $GITHUB_STEP_SUMMARY
           echo "| Notification | ${{ needs.notify-result.result }} |" >> $GITHUB_STEP_SUMMARY
