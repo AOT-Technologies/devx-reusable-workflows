@@ -30,6 +30,11 @@ on:
         required: false
       NEXUS_PASSWORD:
         required: false
+    
+    outputs:
+      image_uri:
+        description: "Full URI of the built Docker image"
+        value: ${{ jobs.docker.outputs.image_uri }}
 
 # Prevent multiple runs on same ref (with smart cancellation)
 concurrency:
