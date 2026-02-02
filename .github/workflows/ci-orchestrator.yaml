@@ -44,6 +44,7 @@ permissions:
   id-token: write         # AWS OIDC
   packages: write         # GHCR push
   pull-requests: write    # SonarQube PR decoration
+  actions: read           # For SARIF metadata
 
 jobs:
   # ---------------------------------------------------------------------------

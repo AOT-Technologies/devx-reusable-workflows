@@ -94,7 +94,7 @@ on:
 permissions:
   contents: read
   security-events: write
-  actions: write
+  actions: read
 
 jobs:
   sbom-scan:
