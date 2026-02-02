@@ -163,7 +163,7 @@ jobs:
           fi
           
           # Validate image_uri format (security: block command injection)
-          if [[ ! "${{ inputs.image_uri }}" =~ ^[a-zA-Z0-9._\-/:@]+$ ]]; then
+          if [[ ! "${{ inputs.image_uri }}" =~ ^[a-zA-Z0-9._/:@-]+$ ]]; then
             echo "::error::Invalid image_uri format: ${{ inputs.image_uri }}"
             echo "::error::Must match pattern: registry.com/image:tag"
             exit 1
