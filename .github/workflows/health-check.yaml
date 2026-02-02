@@ -146,7 +146,12 @@ jobs:
           echo "$KUBECONFIG_DATA" | base64 -d > $HOME/.kube/config
           chmod 600 $HOME/.kube/config
           echo "Kubeconfig loaded successfully"
-          kubectl cluster-info || echo "Warning: Could not verify cluster connectivity"
+          echo "Current kubeconfig context:"
+          kubectl config current-context
+          echo "Cluster info:"
+          kubectl cluster-info
+          echo "Nodes:"
+          kubectl get nodes
 
       - name: Configure AWS Credentials
         if: inputs.role_to_assume != ''
