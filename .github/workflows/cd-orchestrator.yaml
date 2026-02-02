@@ -234,7 +234,7 @@ jobs:
           echo "Extracting configuration for environment: $ENV"
           
           # Deployment target
-          TARGET=$(yq '.deployment.target' $CONFIG_FILE)
+          TARGET=$(yq ".deployment.environments.$ENV.target // .deployment.target" $CONFIG_FILE)
           echo "target=$TARGET" >> $GITHUB_OUTPUT
           echo "  Target: $TARGET"
           
