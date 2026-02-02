@@ -191,7 +191,8 @@ jobs:
       (needs.iac.result == 'success' || needs.iac.result == 'skipped') &&
       !contains(needs.*.result, 'failure') &&
       !contains(needs.*.result, 'cancelled') &&
-      needs.load-config.outputs.language == 'node'
+      needs.load-config.outputs.language == 'node' &&
+      fromJson(needs.load-config.outputs.config).build.enabled != false
     uses: ./.github/workflows/node-build.yaml
     secrets:
       NEXUS_USERNAME: ${{ secrets.NEXUS_USERNAME }}
@@ -221,7 +222,8 @@ jobs:
       (needs.iac.result == 'success' || needs.iac.result == 'skipped') &&
       !contains(needs.*.result, 'failure') &&
       !contains(needs.*.result, 'cancelled') &&
-      needs.load-config.outputs.language == 'python'
+      needs.load-config.outputs.language == 'python' &&
+      fromJson(needs.load-config.outputs.config).build.enabled != false
     uses: ./.github/workflows/python-build.yaml
     secrets:
       NEXUS_USERNAME: ${{ secrets.NEXUS_USERNAME }}
@@ -250,7 +252,8 @@ jobs:
       (needs.iac.result == 'success' || needs.iac.result == 'skipped') &&
       !contains(needs.*.result, 'failure') &&
       !contains(needs.*.result, 'cancelled') &&
-      needs.load-config.outputs.language == 'maven'
+      needs.load-config.outputs.language == 'maven' &&
+      fromJson(needs.load-config.outputs.config).build.enabled != false
     uses: ./.github/workflows/maven-build.yaml
     secrets:
       NEXUS_USERNAME: ${{ secrets.NEXUS_USERNAME }}
