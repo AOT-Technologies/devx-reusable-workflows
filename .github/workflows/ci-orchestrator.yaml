@@ -154,7 +154,7 @@ jobs:
       severity_threshold: ${{ fromJson(needs.load-config.outputs.config).security.sast.severity || 'ERROR' }}
       fail_on_findings: ${{ fromJson(needs.load-config.outputs.config).security.sast.fail_on_findings != false }}
 
-  # Option B: SonarQube (Enterprise, Comprehensive)
+  # Option B: SonarQube
   sast-sonarqube:
     needs: load-config
     if: |

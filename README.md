@@ -1,6 +1,6 @@
 # DevX Reusable Workflows
 
-**Enterprise-Grade CI/CD Workflows for GitHub Actions**
+**CI/CD Workflows for GitHub Actions**
 
 [![Version](https://img.shields.io/badge/version-1.0.0-blue.svg)](https://github.com/AOT-Technologies/devx-reusable-workflows/releases)
 [![License](https://img.shields.io/badge/license-MIT-green.svg)](LICENSE)
