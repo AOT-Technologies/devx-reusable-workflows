@@ -466,6 +466,8 @@ jobs:
       cluster_name: ${{ needs.validate-and-load.outputs.cluster_name }}
       aws_region: ${{ needs.validate-and-load.outputs.aws_region }}
       role_to_assume: ${{ needs.validate-and-load.outputs.role_to_assume }}
+    secrets:
+      KUBECONFIG_DATA: ${{ secrets.KUBECONFIG_DATA }}
 
   # ---------------------------------------------------------------------------
   # 5. ROLLBACK (On Health Check Failure)
