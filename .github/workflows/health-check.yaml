@@ -133,24 +133,30 @@ jobs:
 
     steps:
       - name: Setup kubeconfig from secret
-        if: inputs.check_type == 'k8s' && secrets.KUBECONFIG_DATA != ''
+        if: inputs.check_type == 'k8s'
+        env:
+          KUBECONFIG_DATA: ${{ secrets.KUBECONFIG_DATA }}
         run: |
+          if [[ -z "$KUBECONFIG_DATA" ]]; then
+            echo "KUBECONFIG_DATA secret not provided, skipping kubeconfig setup"
+            exit 0
+          fi
           echo "Setting up kubeconfig from secret..."
           mkdir -p $HOME/.kube
-          echo "${{ secrets.KUBECONFIG_DATA }}" | base64 -d > $HOME/.kube/config
+          echo "$KUBECONFIG_DATA" | base64 -d > $HOME/.kube/config
           chmod 600 $HOME/.kube/config
           echo "Kubeconfig loaded successfully"
           kubectl cluster-info || echo "Warning: Could not verify cluster connectivity"
 
       - name: Configure AWS Credentials
-        if: inputs.role_to_assume != '' && secrets.KUBECONFIG_DATA == ''
+        if: inputs.role_to_assume != ''
         uses: aws-actions/configure-aws-credentials@v4.0.2
         with:
           role-to-assume: ${{ inputs.role_to_assume }}
           aws-region: ${{ inputs.aws_region }}
 
       - name: Setup EKS kubectl
-        if: inputs.check_type == 'k8s' && inputs.cluster_name != '' && secrets.KUBECONFIG_DATA == ''
+        if: inputs.check_type == 'k8s' && inputs.cluster_name != ''
         run: |
           aws eks update-kubeconfig --name "${{ inputs.cluster_name }}" --region ${{ inputs.aws_region }}
           kubectl cluster-info
