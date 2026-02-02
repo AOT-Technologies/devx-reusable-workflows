@@ -40,11 +40,10 @@ concurrency:
 permissions:
   contents: read
   security-events: write  # SARIF uploads
-  actions: write          # Artifact uploads
+  actions: write          # Artifact uploads & SARIF metadata
   id-token: write         # AWS OIDC
   packages: write         # GHCR push
   pull-requests: write    # SonarQube PR decoration
-  actions: read           # For SARIF metadata
 
 jobs:
   # ---------------------------------------------------------------------------
