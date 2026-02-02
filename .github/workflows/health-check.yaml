@@ -27,12 +27,12 @@ on:
         default: false
       port_forward_port:
         description: "Container port to forward"
-        type: number
-        default: 8080
+        type: string
+        default: "8080"
       local_port:
         description: "Local port for port-forward"
-        type: number
-        default: 8080
+        type: string
+        default: "8080"
       check_type:
         description: "Check type: http, tcp, k8s"
         type: string
