@@ -142,6 +142,9 @@ jobs:
       health_check_endpoint: ${{ steps.extract.outputs.health_check_endpoint }}
       health_check_type: ${{ steps.extract.outputs.health_check_type }}
       health_check_url: ${{ steps.extract.outputs.health_check_url }}
+      health_check_port_forward: ${{ steps.extract.outputs.health_check_port_forward }}
+      health_check_port: ${{ steps.extract.outputs.health_check_port }}
+      health_check_local_port: ${{ steps.extract.outputs.health_check_local_port }}
       notifications_enabled: ${{ steps.extract.outputs.notifications_enabled }}
       auto_rollback: ${{ steps.extract.outputs.auto_rollback }}
 
@@ -315,11 +318,17 @@ jobs:
           HC_ENDPOINT=$(yq ".deployment.environments.$ENV.health_check.endpoint // \"/health\"" $CONFIG_FILE)
           HC_TYPE=$(yq ".deployment.environments.$ENV.health_check.type // \"k8s\"" $CONFIG_FILE)
           HC_URL=$(yq ".deployment.environments.$ENV.health_check.url // \"\"" $CONFIG_FILE)
+          HC_PORT_FORWARD=$(yq ".deployment.environments.$ENV.health_check.port_forward // \"false\"" $CONFIG_FILE)
+          HC_PORT=$(yq ".deployment.environments.$ENV.health_check.port_forward_port // \"8080\"" $CONFIG_FILE)
+          HC_LOCAL_PORT=$(yq ".deployment.environments.$ENV.health_check.local_port // \"8080\"" $CONFIG_FILE)
           
           echo "health_check_enabled=$HC_ENABLED" >> $GITHUB_OUTPUT
           echo "health_check_endpoint=$HC_ENDPOINT" >> $GITHUB_OUTPUT
           echo "health_check_type=$HC_TYPE" >> $GITHUB_OUTPUT
           echo "health_check_url=$HC_URL" >> $GITHUB_OUTPUT
+          echo "health_check_port_forward=$HC_PORT_FORWARD" >> $GITHUB_OUTPUT
+          echo "health_check_port=$HC_PORT" >> $GITHUB_OUTPUT
+          echo "health_check_local_port=$HC_LOCAL_PORT" >> $GITHUB_OUTPUT
           
           # Rollback settings
           AUTO_ROLLBACK=$(yq ".deployment.environments.$ENV.auto_rollback // \"true\"" $CONFIG_FILE)
@@ -450,6 +459,9 @@ jobs:
       health_endpoint: ${{ needs.validate-and-load.outputs.health_check_endpoint }}
       health_url: ${{ needs.validate-and-load.outputs.health_check_url }}
       check_type: ${{ needs.validate-and-load.outputs.health_check_type }}
+      port_forward: ${{ needs.validate-and-load.outputs.health_check_port_forward == 'true' }}
+      port_forward_port: ${{ needs.validate-and-load.outputs.health_check_port }}
+      local_port: ${{ needs.validate-and-load.outputs.health_check_local_port }}
       namespace: ${{ needs.validate-and-load.outputs.namespace }}
       cluster_name: ${{ needs.validate-and-load.outputs.cluster_name }}
       aws_region: ${{ needs.validate-and-load.outputs.aws_region }}

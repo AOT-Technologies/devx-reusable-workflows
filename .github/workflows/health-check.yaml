@@ -21,6 +21,18 @@ on:
         description: "Full health check URL (overrides endpoint)"
         type: string
         default: ""
+      port_forward:
+        description: "Use kubectl port-forward for health check (for local K8s)"
+        type: boolean
+        default: false
+      port_forward_port:
+        description: "Container port to forward"
+        type: number
+        default: 8080
+      local_port:
+        description: "Local port for port-forward"
+        type: number
+        default: 8080
       check_type:
         description: "Check type: http, tcp, k8s"
         type: string
@@ -254,6 +266,26 @@ jobs:
       # -------------------------------------------------------------------------
       # HTTP HEALTH CHECK
       # -------------------------------------------------------------------------
+      - name: Setup port-forward (if needed)
+        if: inputs.check_type == 'http' && inputs.port_forward
+        env:
+          KUBECONFIG_DATA: ${{ secrets.KUBECONFIG_DATA }}
+        run: |
+          # Get first ready pod
+          POD_NAME=$(kubectl get pods -n ${{ inputs.namespace }} -o jsonpath='{.items[0].metadata.name}' 2>/dev/null)
+          
+          if [[ -z "$POD_NAME" ]]; then
+            echo "::error::No pods found in namespace ${{ inputs.namespace }}"
+            exit 1
+          fi
+          
+          echo "Setting up port-forward to pod: $POD_NAME"
+          kubectl port-forward -n ${{ inputs.namespace }} "pod/$POD_NAME" ${{ inputs.local_port }}:${{ inputs.port_forward_port }} &
+          PF_PID=$!
+          echo "Port-forward started (PID: $PF_PID)"
+          sleep 2
+          echo "PF_PID=$PF_PID" >> $GITHUB_ENV
+
       - name: HTTP Health Check
         id: http_check
         if: inputs.check_type == 'http'
@@ -263,6 +295,8 @@ jobs:
           # Determine URL
           if [[ -n "${{ inputs.health_url }}" ]]; then
             URL="${{ inputs.health_url }}"
+          elif [[ "${{ inputs.port_forward }}" == "true" ]]; then
+            URL="http://localhost:${{ inputs.local_port }}${{ inputs.health_endpoint }}"
           else
             # Construct URL from environment
             URL="https://${{ inputs.environment }}.example.com${{ inputs.health_endpoint }}"
