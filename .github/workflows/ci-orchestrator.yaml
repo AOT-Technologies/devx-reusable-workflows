@@ -33,8 +33,11 @@ on:
     
     outputs:
       image_uri:
-        description: "Full URI of the built Docker image"
+        description: "Full URI of the built Docker image (with tag)"
         value: ${{ jobs.docker.outputs.image_uri }}
+      image_digest:
+        description: "SHA256 digest of the built Docker image (immutable reference)"
+        value: ${{ jobs.docker.outputs.image_digest }}
 
 # Prevent multiple runs on same ref (with smart cancellation)
 concurrency:
@@ -391,7 +394,7 @@ jobs:
     steps:
       - name: Generate Pipeline Summary
         run: |
-          echo "## 🔐 Enterprise CI Pipeline Summary" >> $GITHUB_STEP_SUMMARY
+          echo "## 🔐 CI Pipeline Summary" >> $GITHUB_STEP_SUMMARY
           echo "" >> $GITHUB_STEP_SUMMARY
           
           # Configuration Info
