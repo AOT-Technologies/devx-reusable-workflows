@@ -141,8 +141,6 @@ jobs:
       health_check_endpoint: ${{ steps.extract.outputs.health_check_endpoint }}
       health_check_type: ${{ steps.extract.outputs.health_check_type }}
       health_check_url: ${{ steps.extract.outputs.health_check_url }}
-      # Common
-      health_check_enabled: ${{ steps.extract.outputs.health_check_enabled }}
       notifications_enabled: ${{ steps.extract.outputs.notifications_enabled }}
       auto_rollback: ${{ steps.extract.outputs.auto_rollback }}
 
