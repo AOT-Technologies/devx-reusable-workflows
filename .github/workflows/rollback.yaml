@@ -154,6 +154,11 @@ jobs:
           
           # Determine target revision
           if [[ "$REVISION" == "0" ]]; then
+            if [[ -z "$CURRENT" || "$CURRENT" == "null" || "$CURRENT" -le 1 ]]; then
+              echo "::warning::No previous successful revision found for rollback"
+              echo "status=skipped" >> $GITHUB_OUTPUT
+              exit 0
+            fi
             TARGET=$((CURRENT - 1))
           else
             TARGET="$REVISION"
