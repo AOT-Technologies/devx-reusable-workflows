@@ -143,6 +143,7 @@ jobs:
       health_check_url: ${{ steps.extract.outputs.health_check_url }}
       notifications_enabled: ${{ steps.extract.outputs.notifications_enabled }}
       auto_rollback: ${{ steps.extract.outputs.auto_rollback }}
+      deployment_timeout: ${{ steps.extract.outputs.deployment_timeout }}
 
     steps:
       - name: Checkout Code
@@ -319,6 +320,10 @@ jobs:
           echo "health_check_type=$HC_TYPE" >> $GITHUB_OUTPUT
           echo "health_check_url=$HC_URL" >> $GITHUB_OUTPUT
           
+          # Timing settings
+          TIMEOUT=$(yq ".deployment.environments.$ENV.timeout // .deployment.helm.timeout // \"10m\"" $CONFIG_FILE)
+          echo "deployment_timeout=$TIMEOUT" >> $GITHUB_OUTPUT
+
           # Rollback settings
           AUTO_ROLLBACK=$(yq ".deployment.environments.$ENV.auto_rollback // \"true\"" $CONFIG_FILE)
           echo "auto_rollback=$AUTO_ROLLBACK" >> $GITHUB_OUTPUT
@@ -366,6 +371,7 @@ jobs:
       helm_set_values: ${{ needs.validate-and-load.outputs.helm_set_values }}
       aws_region: ${{ needs.validate-and-load.outputs.aws_region }}
       role_to_assume: ${{ needs.validate-and-load.outputs.role_to_assume }}
+      timeout: ${{ needs.validate-and-load.outputs.deployment_timeout }}
       dry_run: ${{ inputs.dry_run }}
       atomic: true
 
