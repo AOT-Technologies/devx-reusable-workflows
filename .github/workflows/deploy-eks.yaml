@@ -257,11 +257,19 @@ jobs:
           echo ""
           
           # Execute deployment
+          set -o pipefail
           ${{ steps.prepare.outputs.command }} 2>&1 | tee deploy-output.txt
           DEPLOY_EXIT=$?
           
           if [[ $DEPLOY_EXIT -ne 0 ]]; then
             echo "::error::Helm deployment failed"
+            
+            echo "--- POD DIAGNOSTICS (Post-Failure) ---"
+            kubectl get pods -n "${{ inputs.namespace }}" -l "app.kubernetes.io/instance=${{ inputs.helm_release_name }}" || true
+            
+            echo "--- RECENT EVENTS ---"
+            kubectl get events -n "${{ inputs.namespace }}" --sort-by='.lastTimestamp' | tail -20 || true
+            
             echo "status=failed" >> $GITHUB_OUTPUT
             exit 1
           fi
