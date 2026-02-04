@@ -247,8 +247,16 @@ jobs:
           done
           
           echo "::error::Health check failed after $MAX_RETRIES attempts"
+          
+          echo "--- POD DIAGNOSTICS ---"
+          kubectl get pods -n "$NAMESPACE" -l app.kubernetes.io/instance="$DEPLOYMENT" || \
+          kubectl get pods -n "$NAMESPACE" -l app="$DEPLOYMENT" || true
+          
+          echo "--- RECENT EVENTS ---"
+          kubectl get events -n "$NAMESPACE" --sort-by='.lastTimestamp' | tail -20 || true
+          
           echo "status=unhealthy" >> $GITHUB_OUTPUT
-          echo "details=Deployment $DEPLOYMENT failed to become healthy" >> $GITHUB_OUTPUT
+          echo "details=Deployment $DEPLOYMENT failed to become healthy (check logs for details)" >> $GITHUB_OUTPUT
           exit 1
 
       # -------------------------------------------------------------------------
