@@ -49,20 +49,20 @@ on:
       # Timing
       initial_delay:
         description: "Seconds to wait before first check"
-        type: number
-        default: 30
+        type: string
+        default: "30"
       timeout:
         description: "Timeout per check in seconds"
-        type: number
-        default: 10
+        type: string
+        default: "10"
       retries:
         description: "Number of retry attempts"
-        type: number
-        default: 5
+        type: string
+        default: "5"
       retry_interval:
         description: "Seconds between retries"
-        type: number
-        default: 15
+        type: string
+        default: "15"
       
       # AWS
       aws_region:
