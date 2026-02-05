@@ -134,7 +134,7 @@ jobs:
       run:
         working-directory: ${{ inputs.working_directory }}
     outputs:
-      nexus_upload_path: ${{ steps.upload_nexus.outputs.path }}
+      nexus_path: ${{ steps.upload_nexus.outputs.path }}
       artifact_file: ${{ steps.detect_artifact.outputs.filename || steps.upload_nexus.outputs.filename }}
     
     steps:
