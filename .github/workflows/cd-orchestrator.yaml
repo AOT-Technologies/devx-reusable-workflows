@@ -328,6 +328,7 @@ jobs:
           echo "health_check_retries=$HC_RETRIES" >> $GITHUB_OUTPUT
           echo "health_check_retry_interval=$HC_INTERVAL" >> $GITHUB_OUTPUT
           echo "atomic=$ATOMIC" >> $GITHUB_OUTPUT
+          echo "  Extracted Atomic: $ATOMIC"
           
           # Timing settings
           TIMEOUT=$(yq ".deployment.environments.$ENV.timeout // .deployment.helm.timeout // \"10m\"" $CONFIG_FILE)

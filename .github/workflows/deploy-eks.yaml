@@ -245,7 +245,7 @@ jobs:
           fi
           
           echo "command=$CMD" >> $GITHUB_OUTPUT
-          echo "📋 Helm command prepared"
+          echo "📋 Helm command prepared: $CMD"
 
       - name: Deploy with Helm
         id: helm_deploy
