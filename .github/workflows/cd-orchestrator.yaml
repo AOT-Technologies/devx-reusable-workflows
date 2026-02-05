@@ -271,7 +271,6 @@ jobs:
               echo "helm_values_file=$VALUES" >> $GITHUB_OUTPUT
               echo "helm_set_values=$SET_VALUES" >> $GITHUB_OUTPUT
               echo "atomic=$ATOMIC" >> $GITHUB_OUTPUT
-              echo "  Extracted Atomic: $ATOMIC"
               ;;
             
             k8s)
@@ -322,7 +321,6 @@ jobs:
           esac
           
           # Health check settings
-          HC_ENABLED=$(yq ".deployment.environments.$ENV.health_check.enabled // \"true\"" $CONFIG_FILE)
           HC_ENDPOINT=$(yq ".deployment.environments.$ENV.health_check.endpoint // \"/health\"" $CONFIG_FILE)
           HC_TYPE=$(yq ".deployment.environments.$ENV.health_check.type // \"k8s\"" $CONFIG_FILE)
           HC_URL=$(yq ".deployment.environments.$ENV.health_check.url // \"\"" $CONFIG_FILE)
@@ -332,7 +330,7 @@ jobs:
           # Boolean fields need careful extraction to avoid // fallback for 'false'
           HC_ENABLED=$(yq ".deployment.environments.$ENV.health_check.enabled" $CONFIG_FILE)
           if [[ "$HC_ENABLED" == "null" ]]; then
-            HC_ENABLED=$(yq ".deployment.health_check.enabled // \"false\"" $CONFIG_FILE)
+            HC_ENABLED=$(yq ".deployment.health_check.enabled // \"true\"" $CONFIG_FILE)
           fi
           
           echo "health_check_enabled=$HC_ENABLED" >> $GITHUB_OUTPUT
