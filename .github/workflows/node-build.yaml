@@ -69,7 +69,7 @@ on:
       # --- NEXUS OUTPUTS ---
       nexus_path:
         description: "Path to artifact in Nexus"
-        value: ${{ jobs.build.outputs.nexus_upload_path }}
+        value: ${{ jobs.build.outputs.nexus_path }}
       artifact_file:
         description: "Artifact filename"
         value: ${{ jobs.build.outputs.artifact_file }}
