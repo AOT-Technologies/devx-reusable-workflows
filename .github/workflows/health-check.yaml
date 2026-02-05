@@ -25,6 +25,10 @@ on:
         description: "Check type: http, tcp, k8s"
         type: string
         default: "k8s"
+      ingress_domain:
+        description: "Root domain for health check fallbacks"
+        type: string
+        default: ""
       
       # Kubernetes settings
       namespace:
@@ -274,7 +278,11 @@ jobs:
             URL="${{ inputs.health_url }}"
           else
             # Construct URL from environment
-            URL="https://${{ inputs.environment }}.example.com${{ inputs.health_endpoint }}"
+            if [[ -n "${{ inputs.ingress_domain }}" ]]; then
+              URL="https://${{ inputs.environment }}.${{ inputs.ingress_domain }}${{ inputs.health_endpoint }}"
+            else
+              URL="N/A"
+            fi
           fi
           
           echo "Target: $URL"

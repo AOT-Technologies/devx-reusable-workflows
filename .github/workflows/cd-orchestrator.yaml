@@ -240,7 +240,14 @@ jobs:
           # Deployment target
           TARGET=$(yq ".deployment.environments.$ENV.target // .deployment.target" $CONFIG_FILE)
           echo "target=$TARGET" >> $GITHUB_OUTPUT
-          echo "  Target: $TARGET"
+          
+          # Ingress domain (global vs environment)
+          DOMAIN=$(yq ".deployment.environments.$ENV.ingress_domain // .deployment.ingress_domain // \"\"" $CONFIG_FILE)
+          echo "ingress_domain=$DOMAIN" >> $GITHUB_OUTPUT
+          
+          # Registry settings (global vs environment)
+          SECRET_NAME=$(yq ".deployment.environments.$ENV.image_pull_secret // .deployment.image_pull_secret // \"nexus-credentials\"" $CONFIG_FILE)
+          echo "image_pull_secret=$SECRET_NAME" >> $GITHUB_OUTPUT
           
           # AWS settings
           REGION=$(yq ".deployment.environments.$ENV.region // .aws.default_region // \"us-east-1\"" $CONFIG_FILE)
@@ -286,25 +293,24 @@ jobs:
               ;;
             
             ec2)
-              # EC2 deployment method: 'ssm' or 'ssh'
-              DEPLOY_METHOD=$(yq ".deployment.environments.$ENV.deploy_method // \"ssm\"" $CONFIG_FILE)
-              TARGET_TYPE=$(yq ".deployment.environments.$ENV.target_type // \"tag\"" $CONFIG_FILE)
-              TAG_KEY=$(yq ".deployment.environments.$ENV.target_tag_key // \"Environment\"" $CONFIG_FILE)
-              TAG_VALUE=$(yq ".deployment.environments.$ENV.target_tag_value // \"$ENV\"" $CONFIG_FILE)
-              INSTANCE_IDS=$(yq ".deployment.environments.$ENV.instance_ids // \"\"" $CONFIG_FILE)
-              SSH_USER=$(yq ".deployment.environments.$ENV.ssh_user // \"ec2-user\"" $CONFIG_FILE)
-              COMPOSE_PATH=$(yq ".deployment.environments.$ENV.docker_compose_path // \"/app/docker-compose.yaml\"" $CONFIG_FILE)
-              SERVICE_NAME=$(yq ".deployment.environments.$ENV.service_name // \"app\"" $CONFIG_FILE)
-              
-              echo "ec2_deploy_method=$DEPLOY_METHOD" >> $GITHUB_OUTPUT
-              echo "target_type=$TARGET_TYPE" >> $GITHUB_OUTPUT
-              echo "target_tag_key=$TAG_KEY" >> $GITHUB_OUTPUT
-              echo "target_tag_value=$TAG_VALUE" >> $GITHUB_OUTPUT
-              echo "instance_ids=$INSTANCE_IDS" >> $GITHUB_OUTPUT
-              echo "ssh_user=$SSH_USER" >> $GITHUB_OUTPUT
-              echo "docker_compose_path=$COMPOSE_PATH" >> $GITHUB_OUTPUT
-              echo "service_name=$SERVICE_NAME" >> $GITHUB_OUTPUT
-              echo "  EC2 Deploy Method: $DEPLOY_METHOD"
+               # EC2 extraction (Generic)
+               DEPLOY_METHOD=$(yq ".deployment.environments.$ENV.deploy_method // \"ssm\"" $CONFIG_FILE)
+               TARGET_TYPE=$(yq ".deployment.environments.$ENV.target_type // \"tag\"" $CONFIG_FILE)
+               TAG_KEY=$(yq ".deployment.environments.$ENV.target_tag_key // \"Environment\"" $CONFIG_FILE)
+               TAG_VALUE=$(yq ".deployment.environments.$ENV.target_tag_value // \"$ENV\"" $CONFIG_FILE)
+               INSTANCE_IDS=$(yq ".deployment.environments.$ENV.instance_ids // \"\"" $CONFIG_FILE)
+               SSH_USER=$(yq ".deployment.environments.$ENV.ssh_user // .deployment.ec2.ssh_user // \"ec2-user\"" $CONFIG_FILE)
+               COMPOSE_PATH=$(yq ".deployment.environments.$ENV.docker_compose_path // .deployment.ec2.docker_compose_path // \"/app/docker-compose.yaml\"" $CONFIG_FILE)
+               SERVICE_NAME=$(yq ".deployment.environments.$ENV.service_name // .deployment.ec2.service_name // \"app\"" $CONFIG_FILE)
+               
+               echo "ec2_deploy_method=$DEPLOY_METHOD" >> $GITHUB_OUTPUT
+               echo "target_type=$TARGET_TYPE" >> $GITHUB_OUTPUT
+               echo "target_tag_key=$TAG_KEY" >> $GITHUB_OUTPUT
+               echo "target_tag_value=$TAG_VALUE" >> $GITHUB_OUTPUT
+               echo "instance_ids=$INSTANCE_IDS" >> $GITHUB_OUTPUT
+               echo "ssh_user=$SSH_USER" >> $GITHUB_OUTPUT
+               echo "docker_compose_path=$COMPOSE_PATH" >> $GITHUB_OUTPUT
+               echo "service_name=$SERVICE_NAME" >> $GITHUB_OUTPUT
               ;;
             
             ecs)
@@ -394,6 +400,8 @@ jobs:
       timeout: ${{ needs.validate-and-load.outputs.deployment_timeout }}
       dry_run: ${{ inputs.dry_run }}
       atomic: ${{ needs.validate-and-load.outputs.atomic == 'true' }}
+      image_pull_secret: ${{ needs.validate-and-load.outputs.image_pull_secret }}
+      ingress_domain: ${{ needs.validate-and-load.outputs.ingress_domain }}
 
   # EC2 DEPLOYMENT (via reusable module - SSM or SSH)
   deploy-ec2:
@@ -418,6 +426,7 @@ jobs:
       service_name: ${{ needs.validate-and-load.outputs.service_name }}
       aws_region: ${{ needs.validate-and-load.outputs.aws_region }}
       role_to_assume: ${{ needs.validate-and-load.outputs.role_to_assume }}
+      ingress_domain: ${{ needs.validate-and-load.outputs.ingress_domain }}
 
   # ECS DEPLOYMENT (via reusable module)
   deploy-ecs:
@@ -481,6 +490,7 @@ jobs:
       deployment_name: ${{ needs.validate-and-load.outputs.helm_release_name }}
       retries: ${{ needs.validate-and-load.outputs.health_check_retries }}
       retry_interval: ${{ needs.validate-and-load.outputs.health_check_retry_interval }}
+      ingress_domain: ${{ needs.validate-and-load.outputs.ingress_domain }}
     secrets:
       KUBECONFIG_DATA: ${{ secrets.KUBECONFIG_DATA }}
 

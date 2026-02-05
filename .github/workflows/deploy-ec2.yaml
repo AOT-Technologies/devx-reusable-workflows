@@ -47,6 +47,10 @@ on:
         description: "Auto Scaling Group name"
         type: string
         default: ""
+      ingress_domain:
+        description: "Root domain for ingress fallbacks"
+        type: string
+        default: ""
       
       # SSH-specific settings
       ssh_user:
@@ -527,7 +531,11 @@ jobs:
           fi
           
           # Generate URL placeholder
-          echo "url=https://${{ inputs.environment }}.example.com" >> $GITHUB_OUTPUT
+          if [[ -n "${{ inputs.ingress_domain }}" ]]; then
+            echo "url=https://${{ inputs.environment }}.${{ inputs.ingress_domain }}" >> $GITHUB_OUTPUT
+          else
+            echo "url=N/A" >> $GITHUB_OUTPUT
+          fi
 
       - name: Generate Summary
         if: always()
