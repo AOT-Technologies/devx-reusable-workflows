@@ -266,6 +266,9 @@ jobs:
           echo "Namespace: ${{ inputs.namespace }}"
           echo ""
           
+          echo "--- RENDERED MANIFEST (DEBUG: imagePullSecrets) ---"
+          helm template "${{ inputs.helm_release_name }}" "${{ inputs.helm_chart_path }}" | grep -C 2 "imagePullSecrets" || echo "::warning::imagePullSecrets NOT FOUND in rendered template"
+            
           # Execute deployment
           set -o pipefail
           ${{ steps.prepare.outputs.command }} 2>&1 | tee deploy-output.txt
