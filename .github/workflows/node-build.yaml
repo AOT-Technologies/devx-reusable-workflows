@@ -135,7 +135,7 @@ jobs:
         working-directory: ${{ inputs.working_directory }}
     outputs:
       nexus_upload_path: ${{ steps.upload_nexus.outputs.path }}
-      artifact_file: ${{ steps.detect_artifact.outputs.filename }}
+      artifact_file: ${{ steps.detect_artifact.outputs.filename || steps.upload_nexus.outputs.filename }}
     
     steps:
       - name: Checkout Code
@@ -266,11 +266,16 @@ jobs:
             # Construct the download path for docker-build.yaml
             PKG_NAME=$(node -p "require('./package.json').name")
             PKG_VERSION=$(node -p "require('./package.json').version")
-            FILENAME=$(npm pack --dry-run | tail -n 1)
+            # Robust way to get the filename npm pack will produce:
+            # @scope/name@version -> scope-name-version.tgz
+            # name@version -> name-version.tgz
+            FILENAME=$(node -p "const p=require('./package.json'); p.name.replace('@','').replace('/','-') + '-' + p.version + '.tgz'")
             
             echo "path=${PKG_NAME}/-/${FILENAME}" >> $GITHUB_OUTPUT
             echo "filename=${FILENAME}" >> $GITHUB_OUTPUT
             echo "✅ Published successfully to NPM registry"
+            echo "📦 Artifact Path: ${PKG_NAME}/-/${FILENAME}"
+            echo "📦 Filename: ${FILENAME}"
             
           else
             echo "📤 Uploading to RAW repository..."
