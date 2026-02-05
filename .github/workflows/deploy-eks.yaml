@@ -172,6 +172,16 @@ jobs:
           }
           
           echo "✅ Connected to cluster"
+          
+      - name: Verify Image Pull Secret
+        run: |
+          echo "🔍 Verifying image pull secret: nexus-credentials"
+          if ! kubectl get secret nexus-credentials -n "${{ inputs.namespace }}" > /dev/null 2>&1; then
+            echo "::warning::Image pull secret 'nexus-credentials' not found in namespace '${{ inputs.namespace }}'"
+            echo "::warning::Deployment might fail with ImagePullBackOff/401 Unauthorized"
+          else
+            echo "✅ Image pull secret found"
+          fi
 
       - name: Setup Helm
         uses: azure/setup-helm@v3

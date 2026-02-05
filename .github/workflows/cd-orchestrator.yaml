@@ -258,12 +258,20 @@ jobs:
               VALUES=$(yq ".deployment.environments.$ENV.values_file // .deployment.environments.$ENV.helm.values_file // \"\"" $CONFIG_FILE)
               SET_VALUES=$(yq ".deployment.environments.$ENV.helm.set_values // \"\"" $CONFIG_FILE)
               
+              # Extract boolean field carefully (avoiding // fallback for 'false')
+              ATOMIC=$(yq ".deployment.environments.$ENV.atomic" $CONFIG_FILE)
+              if [[ "$ATOMIC" == "null" ]]; then
+                ATOMIC=$(yq ".deployment.helm.atomic // \"true\"" $CONFIG_FILE)
+              fi
+              
               echo "cluster_name=$CLUSTER" >> $GITHUB_OUTPUT
               echo "namespace=$NAMESPACE" >> $GITHUB_OUTPUT
               echo "helm_chart_path=$CHART" >> $GITHUB_OUTPUT
               echo "helm_release_name=$RELEASE" >> $GITHUB_OUTPUT
               echo "helm_values_file=$VALUES" >> $GITHUB_OUTPUT
               echo "helm_set_values=$SET_VALUES" >> $GITHUB_OUTPUT
+              echo "atomic=$ATOMIC" >> $GITHUB_OUTPUT
+              echo "  Extracted Atomic: $ATOMIC"
               ;;
             
             k8s)
@@ -320,15 +328,19 @@ jobs:
           HC_URL=$(yq ".deployment.environments.$ENV.health_check.url // \"\"" $CONFIG_FILE)
           HC_RETRIES=$(yq ".deployment.environments.$ENV.health_check.retries // 5" $CONFIG_FILE)
           HC_INTERVAL=$(yq ".deployment.environments.$ENV.health_check.retry_interval // 15" $CONFIG_FILE)
-          ATOMIC=$(yq ".deployment.environments.$ENV.atomic // .deployment.helm.atomic // \"true\"" $CONFIG_FILE)
+          
+          # Boolean fields need careful extraction to avoid // fallback for 'false'
+          HC_ENABLED=$(yq ".deployment.environments.$ENV.health_check.enabled" $CONFIG_FILE)
+          if [[ "$HC_ENABLED" == "null" ]]; then
+            HC_ENABLED=$(yq ".deployment.health_check.enabled // \"false\"" $CONFIG_FILE)
+          fi
+          
           echo "health_check_enabled=$HC_ENABLED" >> $GITHUB_OUTPUT
           echo "health_check_endpoint=$HC_ENDPOINT" >> $GITHUB_OUTPUT
           echo "health_check_type=$HC_TYPE" >> $GITHUB_OUTPUT
           echo "health_check_url=$HC_URL" >> $GITHUB_OUTPUT
           echo "health_check_retries=$HC_RETRIES" >> $GITHUB_OUTPUT
           echo "health_check_retry_interval=$HC_INTERVAL" >> $GITHUB_OUTPUT
-          echo "atomic=$ATOMIC" >> $GITHUB_OUTPUT
-          echo "  Extracted Atomic: $ATOMIC"
           
           # Timing settings
           TIMEOUT=$(yq ".deployment.environments.$ENV.timeout // .deployment.helm.timeout // \"10m\"" $CONFIG_FILE)
