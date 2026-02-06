@@ -187,8 +187,12 @@ jobs:
   build-node:
     needs: [load-config, sast-semgrep, sast-sonarqube, iac]
     if: |
+      always() &&
+      needs.load-config.result == 'success' &&
       needs.load-config.outputs.language == 'node' &&
-      fromJson(needs.load-config.outputs.config).build.enabled != false
+      fromJson(needs.load-config.outputs.config).build.enabled != false &&
+      !contains(needs.*.result, 'failure') &&
+      !contains(needs.*.result, 'cancelled')
     uses: ./.github/workflows/node-build.yaml
     secrets:
       NEXUS_USERNAME: ${{ secrets.NEXUS_USERNAME }}
@@ -211,8 +215,12 @@ jobs:
   build-python:
     needs: [load-config, sast-semgrep, sast-sonarqube, iac]
     if: |
+      always() &&
+      needs.load-config.result == 'success' &&
       needs.load-config.outputs.language == 'python' &&
-      fromJson(needs.load-config.outputs.config).build.enabled != false
+      fromJson(needs.load-config.outputs.config).build.enabled != false &&
+      !contains(needs.*.result, 'failure') &&
+      !contains(needs.*.result, 'cancelled')
     uses: ./.github/workflows/python-build.yaml
     secrets:
       NEXUS_USERNAME: ${{ secrets.NEXUS_USERNAME }}
@@ -234,8 +242,12 @@ jobs:
   build-maven:
     needs: [load-config, sast-semgrep, sast-sonarqube, iac]
     if: |
+      always() &&
+      needs.load-config.result == 'success' &&
       needs.load-config.outputs.language == 'maven' &&
-      fromJson(needs.load-config.outputs.config).build.enabled != false
+      fromJson(needs.load-config.outputs.config).build.enabled != false &&
+      !contains(needs.*.result, 'failure') &&
+      !contains(needs.*.result, 'cancelled')
     uses: ./.github/workflows/maven-build.yaml
     secrets:
       NEXUS_USERNAME: ${{ secrets.NEXUS_USERNAME }}
