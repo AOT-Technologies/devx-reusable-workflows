@@ -187,13 +187,6 @@ jobs:
   build-node:
     needs: [load-config, sast-semgrep, sast-sonarqube, iac]
     if: |
-      always() &&
-      needs.load-config.result == 'success' &&
-      (needs.sast-semgrep.result == 'success' || needs.sast-semgrep.result == 'skipped') &&
-      (needs.sast-sonarqube.result == 'success' || needs.sast-sonarqube.result == 'skipped') &&
-      (needs.iac.result == 'success' || needs.iac.result == 'skipped') &&
-      !contains(needs.*.result, 'failure') &&
-      !contains(needs.*.result, 'cancelled') &&
       needs.load-config.outputs.language == 'node' &&
       fromJson(needs.load-config.outputs.config).build.enabled != false
     uses: ./.github/workflows/node-build.yaml
@@ -218,13 +211,6 @@ jobs:
   build-python:
     needs: [load-config, sast-semgrep, sast-sonarqube, iac]
     if: |
-      always() &&
-      needs.load-config.result == 'success' &&
-      (needs.sast-semgrep.result == 'success' || needs.sast-semgrep.result == 'skipped') &&
-      (needs.sast-sonarqube.result == 'success' || needs.sast-sonarqube.result == 'skipped') &&
-      (needs.iac.result == 'success' || needs.iac.result == 'skipped') &&
-      !contains(needs.*.result, 'failure') &&
-      !contains(needs.*.result, 'cancelled') &&
       needs.load-config.outputs.language == 'python' &&
       fromJson(needs.load-config.outputs.config).build.enabled != false
     uses: ./.github/workflows/python-build.yaml
@@ -248,13 +234,6 @@ jobs:
   build-maven:
     needs: [load-config, sast-semgrep, sast-sonarqube, iac]
     if: |
-      always() &&
-      needs.load-config.result == 'success' &&
-      (needs.sast-semgrep.result == 'success' || needs.sast-semgrep.result == 'skipped') &&
-      (needs.sast-sonarqube.result == 'success' || needs.sast-sonarqube.result == 'skipped') &&
-      (needs.iac.result == 'success' || needs.iac.result == 'skipped') &&
-      !contains(needs.*.result, 'failure') &&
-      !contains(needs.*.result, 'cancelled') &&
       needs.load-config.outputs.language == 'maven' &&
       fromJson(needs.load-config.outputs.config).build.enabled != false
     uses: ./.github/workflows/maven-build.yaml
