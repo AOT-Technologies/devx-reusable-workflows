@@ -71,7 +71,7 @@ on:
       # --- NEXUS OUTPUTS ---
       nexus_path:
         description: "Path to artifact in Nexus"
-        value: ${{ jobs.build.outputs.nexus_upload_path }}
+        value: ${{ jobs.build.outputs.nexus_path }}
       artifact_file:
         description: "Artifact filename"
         value: ${{ jobs.build.outputs.artifact_file }}
@@ -136,8 +136,8 @@ jobs:
         working-directory: ${{ inputs.working_directory }}
     
     outputs:
-      nexus_upload_path: ${{ steps.upload_nexus.outputs.path }}
-      artifact_file: ${{ steps.detect_artifact.outputs.filename }}
+      nexus_path: ${{ steps.upload_nexus.outputs.path }}
+      artifact_file: ${{ steps.detect_artifact.outputs.filename || steps.upload_nexus.outputs.filename }}
 
     steps:
       - name: Checkout Code
