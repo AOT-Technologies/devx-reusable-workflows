@@ -293,7 +293,13 @@ jobs:
           if [[ "${{ steps.detect_lang.outputs.language }}" == "maven" ]]; then
             echo "report_path=${{ steps.detect_lang.outputs.project_root }}/target/sonar/report-task.txt" >> $GITHUB_OUTPUT
           else
-            echo "report_path=${{ steps.detect_lang.outputs.project_root }}/.scannerwork/report-task.txt" >> $GITHUB_OUTPUT
+            # The .scannerwork directory is created in the projectBaseDir (scan_path)
+            SCAN_DIR="${{ inputs.scan_path }}"
+            if [[ "$SCAN_DIR" == "." ]]; then
+              echo "report_path=.scannerwork/report-task.txt" >> $GITHUB_OUTPUT
+            else
+              echo "report_path=$SCAN_DIR/.scannerwork/report-task.txt" >> $GITHUB_OUTPUT
+            fi
           fi
 
       - name: Wait for Quality Gate
