@@ -59,8 +59,8 @@ on:
         default: "ec2-user"
       ssh_port:
         description: "SSH port"
-        type: number
-        default: 22
+        type: string
+        default: "22"
       
       # Deployment settings
       docker_compose_path:
@@ -73,8 +73,8 @@ on:
         default: "app"
       app_port:
         description: "Application port for health check"
-        type: number
-        default: 8080
+        type: string
+        default: "8080"
       
       # AWS
       aws_region:

@@ -32,8 +32,8 @@ on:
         default: ""
       revision:
         description: "Specific revision to rollback to (0 = previous)"
-        type: number
-        default: 0
+        type: string
+        default: "0"
       
       # ECS settings
       service_name:

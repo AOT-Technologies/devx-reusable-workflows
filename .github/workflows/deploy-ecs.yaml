@@ -38,8 +38,8 @@ on:
       # Deployment settings
       desired_count:
         description: "Desired task count (0 = keep current)"
-        type: number
-        default: 0
+        type: string
+        default: "0"
       force_new_deployment:
         description: "Force new deployment"
         type: boolean
