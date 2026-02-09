@@ -159,6 +159,9 @@ jobs:
         run: |
           echo "Validating inputs..."
           
+          # Trim whitespace from inputs (prevents YAML multiline newline issues)
+          IMAGE_URI=$(echo "${{ inputs.image_uri }}" | xargs)
+          
           # Validate environment value
           if [[ ! "${{ inputs.environment }}" =~ ^(dev|qa|staging|production)$ ]]; then
             echo "::error::Invalid environment: ${{ inputs.environment }}"
@@ -167,15 +170,15 @@ jobs:
           fi
           
           # Validate image_uri format (security: block command injection)
-          if [[ ! "${{ inputs.image_uri }}" =~ ^[a-zA-Z0-9._/:@-]+$ ]]; then
-            echo "::error::Invalid image_uri format: ${{ inputs.image_uri }}"
+          if [[ ! "$IMAGE_URI" =~ ^[a-zA-Z0-9._/:@-]+$ ]]; then
+            echo "::error::Invalid image_uri format: $IMAGE_URI"
             echo "::error::Must match pattern: registry.com/image:tag"
             exit 1
           fi
           
           # Validate image_uri contains tag
-          if [[ ! "${{ inputs.image_uri }}" =~ .+:.+ ]]; then
-            echo "::error::image_uri must include tag (e.g., registry.com/image:tag)"
+          if [[ ! "$IMAGE_URI" =~ .+:.+ && ! "$IMAGE_URI" =~ .+@.+ ]]; then
+            echo "::error::image_uri must include tag or digest (e.g., registry.com/image:tag or registry.com/image@sha256:...)"
             exit 1
           fi
           
