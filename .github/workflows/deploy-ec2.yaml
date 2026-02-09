@@ -183,6 +183,16 @@ jobs:
           if [[ "${{ inputs.deploy_method }}" == "ssh" ]] && [[ -z "${{ secrets.SSH_PRIVATE_KEY }}" ]]; then
             echo "::warning::SSH method selected but SSH_PRIVATE_KEY secret not set"
           fi
+
+          # Registry Credential Presence Check (Non-ECR)
+          REGISTRY=$(echo "$IMAGE_URI" | cut -d/ -f1)
+          if [[ ! "$REGISTRY" == *".amazonaws.com"* ]] && [[ ! "$REGISTRY" == *".ecr."* ]]; then
+            if [[ -z "${{ secrets.REGISTRY_USERNAME }}" ]] || [[ -z "${{ secrets.REGISTRY_PASSWORD }}" ]]; then
+              echo "::warning::External registry detected but REGISTRY_USERNAME or REGISTRY_PASSWORD is not provided. Falling back to pre-configured credentials on host."
+            else
+              echo "Registry credentials provided, will perform automated login."
+            fi
+          fi
           
           echo "Input validation passed"
 
@@ -382,11 +392,14 @@ jobs:
           echo "Deployment complete on $(hostname)"
           SCRIPT_END
           
-          # Base64 encode the script to safely pass it
+          # Base64 encode the script and credentials to safely pass them
           ENCODED_SCRIPT=$(echo "$DEPLOY_SCRIPT" | base64 -w 0)
+          ENCODED_USER=$(echo -n "${{ secrets.REGISTRY_USERNAME }}" | base64 -w 0)
+          ENCODED_PASS=$(echo -n "${{ secrets.REGISTRY_PASSWORD }}" | base64 -w 0)
           
-          # Build SSM command that decodes and runs the script
-          SSM_COMMAND="echo '$ENCODED_SCRIPT' | base64 -d > /tmp/deploy.sh && chmod +x /tmp/deploy.sh && /tmp/deploy.sh '$IMAGE_URI' '$SERVICE_NAME' '$COMPOSE_PATH' '$AWS_REGION' '${{ secrets.REGISTRY_USERNAME }}' '${{ secrets.REGISTRY_PASSWORD }}'"
+          # Build SSM command: decodes and runs the script with decoded credentials
+          # We decode at the last moment to avoid any shell interpolation of special characters
+          SSM_COMMAND="echo '$ENCODED_SCRIPT' | base64 -d > /tmp/deploy.sh && chmod +x /tmp/deploy.sh && /tmp/deploy.sh '$IMAGE_URI' '$SERVICE_NAME' '$COMPOSE_PATH' '$AWS_REGION' \"\$(echo '$ENCODED_USER' | base64 -d)\" \"\$(echo '$ENCODED_PASS' | base64 -d)\""
           
           # Send SSM command
           COMMAND_ID=$(aws ssm send-command \
@@ -526,14 +539,19 @@ jobs:
           FAILED=""
           SUCCESS_COUNT=0
           
+          # Encode credentials to prevent shell mangling
+          ENCODED_USER=$(echo -n "${{ secrets.REGISTRY_USERNAME }}" | base64 -w 0)
+          ENCODED_PASS=$(echo -n "${{ secrets.REGISTRY_PASSWORD }}" | base64 -w 0)
+          
           # Deploy to each instance
           for IP in $(echo "$PUBLIC_IPS" | tr ',' ' '); do
             echo "Deploying to $IP..."
             
             # Copy and execute script
+            # We decode at the last moment to avoid any shell interpolation of special characters
             scp -i ~/.ssh/deploy_key -P "$SSH_PORT" /tmp/deploy.sh "${SSH_USER}@${IP}:/tmp/deploy.sh" && \
             ssh -i ~/.ssh/deploy_key -p "$SSH_PORT" "${SSH_USER}@${IP}" \
-              "chmod +x /tmp/deploy.sh && /tmp/deploy.sh '$IMAGE_URI' '$SERVICE_NAME' '$COMPOSE_PATH' '$AWS_REGION' '${{ secrets.REGISTRY_USERNAME }}' '${{ secrets.REGISTRY_PASSWORD }}'" && \
+              "chmod +x /tmp/deploy.sh && /tmp/deploy.sh '$IMAGE_URI' '$SERVICE_NAME' '$COMPOSE_PATH' '$AWS_REGION' \"\$(echo '$ENCODED_USER' | base64 -d)\" \"\$(echo '$ENCODED_PASS' | base64 -d)\"" && \
             SUCCESS_COUNT=$((SUCCESS_COUNT + 1)) || {
               echo "::warning::Deployment failed on $IP"
               FAILED="${FAILED}${IP},"
