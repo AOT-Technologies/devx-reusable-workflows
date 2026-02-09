@@ -416,6 +416,8 @@ jobs:
     uses: ./.github/workflows/deploy-ec2.yaml
     secrets:
       SSH_PRIVATE_KEY: ${{ secrets.SSH_PRIVATE_KEY }}
+      REGISTRY_USERNAME: ${{ secrets.NEXUS_USERNAME }}
+      REGISTRY_PASSWORD: ${{ secrets.NEXUS_PASSWORD }}
     with:
       environment: ${{ inputs.environment }}
       image_uri: ${{ inputs.image_uri }}

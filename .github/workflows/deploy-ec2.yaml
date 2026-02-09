@@ -86,6 +86,12 @@ on:
       SSH_PRIVATE_KEY:
         description: "SSH private key (required for SSH method)"
         required: false
+      REGISTRY_USERNAME:
+        description: "Username for external registry login"
+        required: false
+      REGISTRY_PASSWORD:
+        description: "Password for external registry login"
+        required: false
 
     outputs:
       status:
@@ -373,7 +379,7 @@ jobs:
           ENCODED_SCRIPT=$(echo "$DEPLOY_SCRIPT" | base64 -w 0)
           
           # Build SSM command that decodes and runs the script
-          SSM_COMMAND="echo '$ENCODED_SCRIPT' | base64 -d > /tmp/deploy.sh && chmod +x /tmp/deploy.sh && /tmp/deploy.sh '$IMAGE_URI' '$SERVICE_NAME' '$COMPOSE_PATH' '$AWS_REGION'"
+          SSM_COMMAND="echo '$ENCODED_SCRIPT' | base64 -d > /tmp/deploy.sh && chmod +x /tmp/deploy.sh && /tmp/deploy.sh '$IMAGE_URI' '$SERVICE_NAME' '$COMPOSE_PATH' '$AWS_REGION' '${{ secrets.REGISTRY_USERNAME }}' '${{ secrets.REGISTRY_PASSWORD }}'"
           
           # Send SSM command
           COMMAND_ID=$(aws ssm send-command \
@@ -513,7 +519,7 @@ jobs:
             # Copy and execute script
             scp -i ~/.ssh/deploy_key -P "$SSH_PORT" /tmp/deploy.sh "${SSH_USER}@${IP}:/tmp/deploy.sh" && \
             ssh -i ~/.ssh/deploy_key -p "$SSH_PORT" "${SSH_USER}@${IP}" \
-              "chmod +x /tmp/deploy.sh && /tmp/deploy.sh '$IMAGE_URI' '$SERVICE_NAME' '$COMPOSE_PATH' '$AWS_REGION'" && \
+              "chmod +x /tmp/deploy.sh && /tmp/deploy.sh '$IMAGE_URI' '$SERVICE_NAME' '$COMPOSE_PATH' '$AWS_REGION' '${{ secrets.REGISTRY_USERNAME }}' '${{ secrets.REGISTRY_PASSWORD }}'" && \
             SUCCESS_COUNT=$((SUCCESS_COUNT + 1)) || {
               echo "::warning::Deployment failed on $IP"
               FAILED="${FAILED}${IP},"
