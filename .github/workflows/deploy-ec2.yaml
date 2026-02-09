@@ -372,7 +372,7 @@ jobs:
             echo "Detected non-ECR registry (Nexus/other): $REGISTRY"
             if [[ -n "$REG_USER" && -n "$REG_PASS" ]]; then
               echo "Performing automated login to $REGISTRY..."
-              echo "$REG_PASS" | docker login --username "$REG_USER" --password-stdin "$REGISTRY"
+              printf '%s' "$REG_PASS" | docker login --username "$REG_USER" --password-stdin "$REGISTRY"
             else
               echo "Using pre-configured Docker credentials from ~/.docker/config.json"
             fi
@@ -517,7 +517,7 @@ jobs:
             echo "Detected non-ECR registry (Nexus/other): $REGISTRY"
             if [[ -n "$REG_USER" && -n "$REG_PASS" ]]; then
               echo "Performing automated login to $REGISTRY..."
-              echo "$REG_PASS" | docker login --username "$REG_USER" --password-stdin "$REGISTRY"
+              printf '%s' "$REG_PASS" | docker login --username "$REG_USER" --password-stdin "$REGISTRY"
             else
               echo "Using pre-configured Docker credentials from ~/.docker/config.json"
             fi
