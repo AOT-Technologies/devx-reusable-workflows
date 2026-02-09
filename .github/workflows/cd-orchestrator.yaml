@@ -557,6 +557,7 @@ jobs:
       ssh_user: ${{ needs.validate-and-load.outputs.ssh_user }}
       docker_compose_path: ${{ needs.validate-and-load.outputs.docker_compose_path }}
       service_name: ${{ needs.validate-and-load.outputs.service_name }}
+      app_port: ${{ needs.validate-and-load.outputs.health_check_port }}
       aws_region: ${{ needs.validate-and-load.outputs.aws_region }}
       role_to_assume: ${{ needs.validate-and-load.outputs.role_to_assume }}
 
