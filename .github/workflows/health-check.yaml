@@ -269,7 +269,7 @@ jobs:
 
       - name: HTTP Health Check
         id: http_check
-        if: inputs.check_type == 'http'
+        if: inputs.check_type == 'http' || inputs.check_type == 'url'
         run: |
           echo "Running HTTP health check..."
           
@@ -316,10 +316,14 @@ jobs:
                 PRETTY_BODY=$(echo "$BODY" | jq .)
                 echo "Response Body:"
                 echo "$PRETTY_BODY"
-                echo "details=HTTP 200 OK from $URL. Body: $BODY" >> $GITHUB_OUTPUT
+                echo "details<<EOF" >> $GITHUB_OUTPUT
+                echo "HTTP 200 OK from $URL. Body: $BODY" >> $GITHUB_OUTPUT
+                echo "EOF" >> $GITHUB_OUTPUT
               else
                 echo "Response Body: $BODY"
-                echo "details=HTTP 200 OK from $URL. Body: $BODY" >> $GITHUB_OUTPUT
+                echo "details<<EOF" >> $GITHUB_OUTPUT
+                echo "HTTP 200 OK from $URL. Body: $BODY" >> $GITHUB_OUTPUT
+                echo "EOF" >> $GITHUB_OUTPUT
               fi
               exit 0
             fi
@@ -355,13 +359,19 @@ jobs:
           # Aggregate results from all check types
           if [[ "${{ steps.k8s_check.outputs.status }}" == "healthy" ]]; then
             echo "status=healthy" >> $GITHUB_OUTPUT
-            echo "details=${{ steps.k8s_check.outputs.details }}" >> $GITHUB_OUTPUT
+            echo "details<<EOF" >> $GITHUB_OUTPUT
+            echo "${{ steps.k8s_check.outputs.details }}" >> $GITHUB_OUTPUT
+            echo "EOF" >> $GITHUB_OUTPUT
           elif [[ "${{ steps.http_check.outputs.status }}" == "healthy" ]]; then
             echo "status=healthy" >> $GITHUB_OUTPUT
-            echo "details=${{ steps.http_check.outputs.details }}" >> $GITHUB_OUTPUT
+            echo "details<<EOF" >> $GITHUB_OUTPUT
+            echo "${{ steps.http_check.outputs.details }}" >> $GITHUB_OUTPUT
+            echo "EOF" >> $GITHUB_OUTPUT
           elif [[ "${{ steps.tcp_check.outputs.status }}" == "healthy" ]]; then
             echo "status=healthy" >> $GITHUB_OUTPUT
-            echo "details=${{ steps.tcp_check.outputs.details }}" >> $GITHUB_OUTPUT
+            echo "details<<EOF" >> $GITHUB_OUTPUT
+            echo "${{ steps.tcp_check.outputs.details }}" >> $GITHUB_OUTPUT
+            echo "EOF" >> $GITHUB_OUTPUT
           else
             echo "status=unhealthy" >> $GITHUB_OUTPUT
             echo "details=Health check failed" >> $GITHUB_OUTPUT
@@ -369,6 +379,9 @@ jobs:
 
       - name: Generate Summary
         if: always()
+        env:
+          DETAILS: ${{ steps.result.outputs.details }}
+          STATUS: ${{ steps.result.outputs.status }}
         run: |
           echo "## Health Check Results" >> $GITHUB_STEP_SUMMARY
           echo "" >> $GITHUB_STEP_SUMMARY
@@ -377,14 +390,15 @@ jobs:
           echo "| Environment | ${{ inputs.environment }} |" >> $GITHUB_STEP_SUMMARY
           echo "| Check Type | ${{ inputs.check_type }} |" >> $GITHUB_STEP_SUMMARY
           echo "| Namespace | ${{ inputs.namespace }} |" >> $GITHUB_STEP_SUMMARY
-          echo "| Status | **${{ steps.result.outputs.status }}** |" >> $GITHUB_STEP_SUMMARY
+          echo "| Status | **$STATUS** |" >> $GITHUB_STEP_SUMMARY
           echo "" >> $GITHUB_STEP_SUMMARY
           
-          if [[ "${{ steps.result.outputs.status }}" == "healthy" ]]; then
+          if [[ "$STATUS" == "healthy" ]]; then
             echo "### Health Check: **PASSED**" >> $GITHUB_STEP_SUMMARY
             echo "#### Details:" >> $GITHUB_STEP_SUMMARY
             echo '```json' >> $GITHUB_STEP_SUMMARY
-            echo "${{ steps.result.outputs.details }}" | sed 's/.*Body: //' | jq . 2>/dev/null || echo "${{ steps.result.outputs.details }}" >> $GITHUB_STEP_SUMMARY
+            # Use env var to safely handle multiline details and extract JSON body
+            echo "$DETAILS" | sed 's/.*Body: //' | jq . 2>/dev/null || echo "$DETAILS" >> $GITHUB_STEP_SUMMARY
             echo '```' >> $GITHUB_STEP_SUMMARY
           else
             echo "### Health Check: **FAILED**" >> $GITHUB_STEP_SUMMARY
