@@ -410,11 +410,14 @@ jobs:
           # We decode at the last moment to avoid any shell interpolation of special characters
           SSM_COMMAND="echo '$ENCODED_SCRIPT' | base64 -d > /tmp/deploy.sh && chmod +x /tmp/deploy.sh && /tmp/deploy.sh '$IMAGE_URI' '$SERVICE_NAME' '$COMPOSE_PATH' '$AWS_REGION' \"\$(echo '$ENCODED_USER' | base64 -d)\" \"\$(echo '$ENCODED_PASS' | base64 -d)\""
           
+          # Create parameters JSON safely using jq
+          SSM_PARAMS=$(jq -n --arg cmd "$SSM_COMMAND" '{"commands": [$cmd], "executionTimeout": ["600"]}')
+          
           # Send SSM command
           COMMAND_ID=$(aws ssm send-command \
             --document-name "AWS-RunShellScript" \
             --targets "Key=instanceids,Values=$INSTANCES" \
-            --parameters "{\"commands\":[\"$SSM_COMMAND\"],\"executionTimeout\":[\"600\"]}" \
+            --parameters "$SSM_PARAMS" \
             --comment "Deploy ${{ inputs.environment }}: ${IMAGE_URI##*/}" \
             --timeout-seconds 600 \
             --output text \
