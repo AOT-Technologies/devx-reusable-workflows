@@ -182,10 +182,14 @@ jobs:
             exit 1
           fi
           
-          # Validate config file exists
-          if [[ ! -f "${{ inputs.config_path }}" ]]; then
-            echo "::error::Config file not found: ${{ inputs.config_path }}"
-            exit 1
+          # Validate credentials for external registry
+          REGISTRY=$(echo "$IMAGE_URI" | cut -d/ -f1)
+          if [[ ! "$REGISTRY" == *".amazonaws.com"* ]] && [[ ! "$REGISTRY" == *".ecr."* ]]; then
+            if [[ -z "${{ secrets.NEXUS_USERNAME }}" ]] || [[ -z "${{ secrets.NEXUS_PASSWORD }}" ]]; then
+              echo "::warning::Nexus credentials (NEXUS_USERNAME/PASSWORD) are empty or not passed. Deployment might fail if host isn't pre-authenticated."
+            else
+              echo "✓ Nexus credentials detected in orchestrator"
+            fi
           fi
           
           echo "Input validation passed"
