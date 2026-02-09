@@ -1,6 +1,9 @@
 # Troubleshooting Guide
 
-Common issues and solutions for DevX Reusable Workflows.
+Common issues and solutions for DevX Reusable Workflows (CI).
+
+> **Looking for Deployment Issues?**  
+> Check out the [CD Troubleshooting Guide](CD_TROUBLESHOOTING.md).
 
 ---
 

@@ -1,6 +1,9 @@
 # Getting Started with DevX Reusable Workflows
 
-This guide provides a complete walkthrough for setting up the DevX CI/CD pipeline for your project.
+This guide provides a complete walkthrough for setting up the **CI (Build)** pipeline.
+
+> **Looking for Deployment (CD)?**  
+> Check out the [Deployment Guide](DEPLOYMENT_GUIDE.md) to set up EKS, ECS, or EC2 deployments.
 
 ---
 
@@ -540,4 +543,5 @@ Before considering yourself "done":
    ![CI Pipeline](https://github.com/your-org/your-repo/workflows/CI%20Pipeline/badge.svg)
    ```
 3. **Make Security Checks Required** - Settings → Branches → Branch protection
-4. **Explore Advanced Features** - See [CONFIG_REFERENCE.md](CONFIG_REFERENCE.md)
+4. **Set up Deployment** - Follow the [Deployment Guide](DEPLOYMENT_GUIDE.md) to deploy your application.
+5. **Explore Advanced Features** - See [CONFIG_REFERENCE.md](CONFIG_REFERENCE.md)

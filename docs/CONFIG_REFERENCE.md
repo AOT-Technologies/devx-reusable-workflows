@@ -2,6 +2,9 @@
 
 Complete reference for all configuration options in the `devx-ci.yaml` file.
 
+> **Looking for CD Configuration?**  
+> Check out the [CD Configuration Reference](CD_CONFIG_REFERENCE.md) for `devx-config.yaml`.
+
 ---
 
 ## 📋 Table of Contents
