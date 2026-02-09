@@ -143,6 +143,7 @@ jobs:
       health_check_url: ${{ steps.extract.outputs.health_check_url }}
       health_check_retries: ${{ steps.extract.outputs.health_check_retries }}
       health_check_retry_interval: ${{ steps.extract.outputs.health_check_retry_interval }}
+      health_check_port: ${{ steps.extract.outputs.health_check_port }}
       notifications_enabled: ${{ steps.extract.outputs.notifications_enabled }}
       auto_rollback: ${{ steps.extract.outputs.auto_rollback }}
       atomic: ${{ steps.extract.outputs.atomic }}
