@@ -347,6 +347,13 @@ jobs:
           echo "Image: $IMAGE"
           echo "Service: $SERVICE"
           
+          # Debug credentials (MASKED)
+          if [[ -n "$REG_USER" ]]; then
+            MASKED_USER="${REG_USER:0:1}***${REG_USER: -1}"
+            echo "✓ Received registry user: $MASKED_USER (Length: ${#REG_USER})"
+            echo "✓ Received registry pass length: ${#REG_PASS}"
+          fi
+          
           # Validate image format (security check)
           if [[ ! "$IMAGE" =~ ^[a-zA-Z0-9._/:@-]+$ ]]; then
             echo "ERROR: Invalid image format: $IMAGE"
