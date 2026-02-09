@@ -161,7 +161,7 @@ jobs:
           IMAGE_URI=$(echo "${{ inputs.image_uri }}" | xargs)
           
           # Security: Validate image URI format to prevent injection
-          if [[ ! "$IMAGE_URI" =~ ^[a-zA-Z0-9._\-/:@]+$ ]]; then
+          if [[ ! "$IMAGE_URI" =~ ^[a-zA-Z0-9._/:@-]+$ ]]; then
             echo "::error::Invalid image_uri format: $IMAGE_URI. Possible injection attempt."
             exit 1
           fi
