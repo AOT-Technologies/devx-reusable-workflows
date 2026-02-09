@@ -183,11 +183,8 @@ jobs:
           role-to-assume: ${{ inputs.role_to_assume }}
           aws-region: ${{ inputs.aws_region }}
 
-      - name: Login to ECR
-        id: ecr_login
-        uses: aws-actions/amazon-ecr-login@v2
-        with:
-          mask-password: true
+      # Registry login is handled on EC2 instance during deployment
+      # No pre-login needed in GitHub Actions runner
 
       - name: Determine Target Instances
         id: targets
