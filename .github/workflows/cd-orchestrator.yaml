@@ -490,7 +490,11 @@ jobs:
     with:
       environment: ${{ inputs.environment }}
       health_endpoint: ${{ needs.validate-and-load.outputs.health_check_endpoint }}
-      health_url: ${{ needs.validate-and-load.outputs.health_check_url }}
+      health_url: >-
+        ${{ needs.validate-and-load.outputs.health_check_url != '' 
+          && needs.validate-and-load.outputs.health_check_url 
+          || (needs.deploy-eks.outputs.url || needs.deploy-ec2.outputs.url || needs.deploy-ecs.outputs.url || needs.deploy-k8s.outputs.url || '') 
+        }}
       check_type: ${{ needs.validate-and-load.outputs.health_check_type }}
       namespace: ${{ needs.validate-and-load.outputs.namespace }}
       cluster_name: ${{ needs.validate-and-load.outputs.cluster_name }}

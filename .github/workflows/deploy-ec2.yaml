@@ -595,11 +595,19 @@ jobs:
             echo "status=failed" >> $GITHUB_OUTPUT
           fi
           
-          # Generate URL placeholder
+          # Generate URL
           if [[ -n "${{ inputs.ingress_domain }}" ]]; then
             echo "url=https://${{ inputs.environment }}.${{ inputs.ingress_domain }}" >> $GITHUB_OUTPUT
           else
-            echo "url=N/A" >> $GITHUB_OUTPUT
+            # Fallback to first public IP if available
+            IP=$(echo "${{ steps.targets.outputs.public_ips }}" | cut -d',' -f1)
+            if [[ -n "$IP" ]]; then
+              # Note: Defaulting to 8080 as it's common for Java/Spring apps in this env
+              # In a more generic setup, this could be an input
+              echo "url=http://${IP}:8080" >> $GITHUB_OUTPUT
+            else
+              echo "url=N/A" >> $GITHUB_OUTPUT
+            fi
           fi
 
       - name: Generate Summary

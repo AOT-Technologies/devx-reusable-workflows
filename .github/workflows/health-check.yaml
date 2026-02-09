@@ -302,12 +302,25 @@ jobs:
           for ((i=1; i<=MAX_RETRIES; i++)); do
             echo "Attempt $i/$MAX_RETRIES..."
             
-            HTTP_STATUS=$(curl -s $SSL_FLAG -o /dev/null -w "%{http_code}" --max-time $TIMEOUT "$URL" 2>&1) || HTTP_STATUS="000"
+            # Capture both status and body
+            RESPONSE=$(curl -s $SSL_FLAG -w "\n%{http_code}" --max-time $TIMEOUT "$URL" 2>&1) || RESPONSE="Error: curl failed\n000"
+            HTTP_STATUS=$(echo "$RESPONSE" | tail -n 1)
+            BODY=$(echo "$RESPONSE" | sed '$d')
             
             if [[ "$HTTP_STATUS" == "200" ]]; then
               echo "Health check passed (HTTP $HTTP_STATUS)"
               echo "status=healthy" >> $GITHUB_OUTPUT
-              echo "details=HTTP 200 OK from $URL" >> $GITHUB_OUTPUT
+              
+              # Pretty-print JSON if jq is available
+              if echo "$BODY" | jq . > /dev/null 2>&1; then
+                PRETTY_BODY=$(echo "$BODY" | jq .)
+                echo "Response Body:"
+                echo "$PRETTY_BODY"
+                echo "details=HTTP 200 OK from $URL. Body: $BODY" >> $GITHUB_OUTPUT
+              else
+                echo "Response Body: $BODY"
+                echo "details=HTTP 200 OK from $URL. Body: $BODY" >> $GITHUB_OUTPUT
+              fi
               exit 0
             fi
             
@@ -369,6 +382,10 @@ jobs:
           
           if [[ "${{ steps.result.outputs.status }}" == "healthy" ]]; then
             echo "### Health Check: **PASSED**" >> $GITHUB_STEP_SUMMARY
+            echo "#### Details:" >> $GITHUB_STEP_SUMMARY
+            echo '```json' >> $GITHUB_STEP_SUMMARY
+            echo "${{ steps.result.outputs.details }}" | sed 's/.*Body: //' | jq . 2>/dev/null || echo "${{ steps.result.outputs.details }}" >> $GITHUB_STEP_SUMMARY
+            echo '```' >> $GITHUB_STEP_SUMMARY
           else
             echo "### Health Check: **FAILED**" >> $GITHUB_STEP_SUMMARY
           fi
