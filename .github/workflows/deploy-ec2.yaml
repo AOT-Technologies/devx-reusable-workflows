@@ -329,8 +329,8 @@ jobs:
           echo "Service: $SERVICE"
           
           # Validate image format (security check)
-          if [[ ! "$IMAGE" =~ ^[a-zA-Z0-9._\-/:@]+$ ]]; then
-            echo "ERROR: Invalid image format"
+          if [[ ! "$IMAGE" =~ ^[a-zA-Z0-9._/:@-]+$ ]]; then
+            echo "ERROR: Invalid image format: $IMAGE"
             exit 1
           fi
           
@@ -456,8 +456,8 @@ jobs:
           echo "Starting deployment on $(hostname)"
           
           # Validate image format
-          if [[ ! "$IMAGE" =~ ^[a-zA-Z0-9._\-/:@]+$ ]]; then
-            echo "ERROR: Invalid image format"
+          if [[ ! "$IMAGE" =~ ^[a-zA-Z0-9._/:@-]+$ ]]; then
+            echo "ERROR: Invalid image format: $IMAGE"
             exit 1
           fi
           
