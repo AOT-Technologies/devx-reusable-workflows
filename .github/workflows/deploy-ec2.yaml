@@ -329,6 +329,8 @@ jobs:
           SERVICE="$2"
           COMPOSE_PATH="$3"
           REGION="$4"
+          REG_USER="${5:-""}"
+          REG_PASS="${6:-""}"
           
           echo "Starting deployment on $(hostname)"
           echo "Image: $IMAGE"
@@ -350,7 +352,12 @@ jobs:
               docker login --username AWS --password-stdin "$REGISTRY"
           else
             echo "Detected non-ECR registry (Nexus/other): $REGISTRY"
-            echo "Using pre-configured Docker credentials from ~/.docker/config.json"
+            if [[ -n "$REG_USER" && -n "$REG_PASS" ]]; then
+              echo "Performing automated login to $REGISTRY..."
+              echo "$REG_PASS" | docker login --username "$REG_USER" --password-stdin "$REGISTRY"
+            else
+              echo "Using pre-configured Docker credentials from ~/.docker/config.json"
+            fi
           fi
           
           # Pull new image
@@ -466,6 +473,8 @@ jobs:
           SERVICE="$2"
           COMPOSE_PATH="$3"
           REGION="$4"
+          REG_USER="${5:-""}"
+          REG_PASS="${6:-""}"
           
           echo "Starting deployment on $(hostname)"
           
@@ -485,7 +494,12 @@ jobs:
               docker login --username AWS --password-stdin "$REGISTRY"
           else
             echo "Detected non-ECR registry (Nexus/other): $REGISTRY"
-            echo "Using pre-configured Docker credentials from ~/.docker/config.json"
+            if [[ -n "$REG_USER" && -n "$REG_PASS" ]]; then
+              echo "Performing automated login to $REGISTRY..."
+              echo "$REG_PASS" | docker login --username "$REG_USER" --password-stdin "$REGISTRY"
+            else
+              echo "Using pre-configured Docker credentials from ~/.docker/config.json"
+            fi
           fi
           
           # Pull new image
