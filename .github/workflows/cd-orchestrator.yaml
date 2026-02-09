@@ -339,6 +339,7 @@ jobs:
           HC_URL=$(yq ".deployment.environments.$ENV.health_check.url // \"\"" $CONFIG_FILE)
           HC_RETRIES=$(yq ".deployment.environments.$ENV.health_check.retries // 5" $CONFIG_FILE)
           HC_INTERVAL=$(yq ".deployment.environments.$ENV.health_check.retry_interval // 15" $CONFIG_FILE)
+          HC_PORT=$(yq ".deployment.environments.$ENV.health_check.port // .deployment.health_check.port // 8080" $CONFIG_FILE)
           
           # Boolean fields need careful extraction to avoid // fallback for 'false'
           HC_ENABLED=$(yq ".deployment.environments.$ENV.health_check.enabled" $CONFIG_FILE)
@@ -352,6 +353,7 @@ jobs:
           echo "health_check_url=$HC_URL" >> $GITHUB_OUTPUT
           echo "health_check_retries=$HC_RETRIES" >> $GITHUB_OUTPUT
           echo "health_check_retry_interval=$HC_INTERVAL" >> $GITHUB_OUTPUT
+          echo "health_check_port=$HC_PORT" >> $GITHUB_OUTPUT
           
           # Timing settings
           TIMEOUT=$(yq ".deployment.environments.$ENV.timeout // .deployment.helm.timeout // \"10m\"" $CONFIG_FILE)

@@ -71,6 +71,10 @@ on:
         description: "Service name in docker-compose"
         type: string
         default: "app"
+      app_port:
+        description: "Application port for health check"
+        type: number
+        default: 8080
       
       # AWS
       aws_region:
@@ -244,26 +248,27 @@ jobs:
           COUNT=$(echo "$INSTANCES" | tr ',' '\n' | grep -c . || echo "0")
           echo "count=$COUNT" >> $GITHUB_OUTPUT
           
-          # Get IPs for SSH method
-          if [[ "${{ inputs.deploy_method }}" == "ssh" ]]; then
-            FIRST_INSTANCE=$(echo "$INSTANCES" | cut -d',' -f1)
-            PUBLIC_IP=$(aws ec2 describe-instances \
-              --instance-ids "$FIRST_INSTANCE" \
+          # Get IPs for health check fallback and SSH
+          FIRST_INSTANCE=$(echo "$INSTANCES" | cut -d',' -f1)
+          PUBLIC_IP=$(aws ec2 describe-instances \
+            --instance-ids "$FIRST_INSTANCE" \
+            --query 'Reservations[0].Instances[0].PublicIpAddress' \
+            --output text)
+          echo "public_ip=$PUBLIC_IP" >> $GITHUB_OUTPUT
+          
+          # Get all IPs
+          IPS=""
+          for INSTANCE in $(echo "$INSTANCES" | tr ',' ' '); do
+            IP=$(aws ec2 describe-instances \
+              --instance-ids "$INSTANCE" \
               --query 'Reservations[0].Instances[0].PublicIpAddress' \
               --output text)
-            echo "public_ip=$PUBLIC_IP" >> $GITHUB_OUTPUT
-            
-            # Get all IPs
-            IPS=""
-            for INSTANCE in $(echo "$INSTANCES" | tr ',' ' '); do
-              IP=$(aws ec2 describe-instances \
-                --instance-ids "$INSTANCE" \
-                --query 'Reservations[0].Instances[0].PublicIpAddress' \
-                --output text)
+            if [[ -n "$IP" && "$IP" != "None" ]]; then
               IPS="${IPS}${IP},"
-            done
-            echo "public_ips=${IPS%,}" >> $GITHUB_OUTPUT
-          fi
+            fi
+          done
+          IPS=${IPS%,}
+          echo "public_ips=$IPS" >> $GITHUB_OUTPUT
 
       # =========================================================================
       # STATE MEASUREMENT (For Rollback)
@@ -604,10 +609,8 @@ jobs:
           else
             # Fallback to first public IP if available
             IP=$(echo "${{ steps.targets.outputs.public_ips }}" | cut -d',' -f1)
-            if [[ -n "$IP" ]]; then
-              # Note: Defaulting to 8080 as it's common for Java/Spring apps in this env
-              # In a more generic setup, this could be an input
-              echo "url=http://${IP}:8080" >> $GITHUB_OUTPUT
+            if [[ -n "$IP" && "$IP" != "None" && "$IP" != "N/A" ]]; then
+              echo "url=http://${IP}:${{ inputs.app_port }}" >> $GITHUB_OUTPUT
             else
               echo "url=N/A" >> $GITHUB_OUTPUT
             fi

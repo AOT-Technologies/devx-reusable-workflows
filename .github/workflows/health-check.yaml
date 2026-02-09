@@ -274,7 +274,7 @@ jobs:
           echo "Running HTTP health check..."
           
           # Determine URL
-          if [[ -n "${{ inputs.health_url }}" ]]; then
+          if [[ -n "${{ inputs.health_url }}" && "${{ inputs.health_url }}" != "N/A" ]]; then
             URL="${{ inputs.health_url }}"
           else
             # Construct URL from environment
