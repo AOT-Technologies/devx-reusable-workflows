@@ -189,8 +189,14 @@ jobs:
           if [[ ! "$REGISTRY" == *".amazonaws.com"* ]] && [[ ! "$REGISTRY" == *".ecr."* ]]; then
             if [[ -z "${{ secrets.REGISTRY_USERNAME }}" ]] || [[ -z "${{ secrets.REGISTRY_PASSWORD }}" ]]; then
               echo "::warning::External registry detected but REGISTRY_USERNAME or REGISTRY_PASSWORD is not provided. Falling back to pre-configured credentials on host."
+              echo "::warning::Please ensure NEXUS_USERNAME and NEXUS_PASSWORD are set in your repository secrets."
             else
-              echo "Registry credentials provided, will perform automated login."
+              echo "✓ Registry credentials provided, will perform automated login."
+              # Debug: Show credential status without exposing values
+              USER_LEN=$(echo -n "${{ secrets.REGISTRY_USERNAME }}" | wc -c)
+              PASS_LEN=$(echo -n "${{ secrets.REGISTRY_PASSWORD }}" | wc -c)
+              echo "  - Username length: $USER_LEN characters"
+              echo "  - Password length: $PASS_LEN characters"
             fi
           fi
           
