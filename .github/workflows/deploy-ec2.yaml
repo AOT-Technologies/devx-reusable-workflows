@@ -320,11 +320,12 @@ jobs:
         id: ssm_deploy
         if: inputs.deploy_method == 'ssm'
         env:
-          # Pass variables as environment variables for safe interpolation
           IMAGE_URI: ${{ inputs.image_uri }}
           SERVICE_NAME: ${{ inputs.service_name }}
           COMPOSE_PATH: ${{ inputs.docker_compose_path }}
           AWS_REGION: ${{ inputs.aws_region }}
+          REG_USER: ${{ secrets.REGISTRY_USERNAME }}
+          REG_PASS: ${{ secrets.REGISTRY_PASSWORD }}
         run: |
           echo "Deploying to EC2 instances via SSM..."
           
@@ -402,8 +403,8 @@ jobs:
           
           # Base64 encode the script and credentials to safely pass them
           ENCODED_SCRIPT=$(echo "$DEPLOY_SCRIPT" | base64 -w 0)
-          ENCODED_USER=$(echo -n "${{ secrets.REGISTRY_USERNAME }}" | base64 -w 0)
-          ENCODED_PASS=$(echo -n "${{ secrets.REGISTRY_PASSWORD }}" | base64 -w 0)
+          ENCODED_USER=$(printf '%s' "$REG_USER" | base64 -w 0)
+          ENCODED_PASS=$(printf '%s' "$REG_PASS" | base64 -w 0)
           
           # Build SSM command: decodes and runs the script with decoded credentials
           # We decode at the last moment to avoid any shell interpolation of special characters
@@ -478,6 +479,8 @@ jobs:
           SERVICE_NAME: ${{ inputs.service_name }}
           COMPOSE_PATH: ${{ inputs.docker_compose_path }}
           AWS_REGION: ${{ inputs.aws_region }}
+          REG_USER: ${{ secrets.REGISTRY_USERNAME }}
+          REG_PASS: ${{ secrets.REGISTRY_PASSWORD }}
         run: |
           echo "Deploying to EC2 instances via SSH..."
           
@@ -548,8 +551,8 @@ jobs:
           SUCCESS_COUNT=0
           
           # Encode credentials to prevent shell mangling
-          ENCODED_USER=$(echo -n "${{ secrets.REGISTRY_USERNAME }}" | base64 -w 0)
-          ENCODED_PASS=$(echo -n "${{ secrets.REGISTRY_PASSWORD }}" | base64 -w 0)
+          ENCODED_USER=$(printf '%s' "$REG_USER" | base64 -w 0)
+          ENCODED_PASS=$(printf '%s' "$REG_PASS" | base64 -w 0)
           
           # Deploy to each instance
           for IP in $(echo "$PUBLIC_IPS" | tr ',' ' '); do
