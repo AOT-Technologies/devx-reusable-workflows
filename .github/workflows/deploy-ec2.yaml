@@ -334,10 +334,18 @@ jobs:
             exit 1
           fi
           
-          # Login to ECR
+          # Login to registry (ECR or Nexus)
           REGISTRY=$(echo "$IMAGE" | cut -d/ -f1)
-          aws ecr get-login-password --region "$REGION" | \
-            docker login --username AWS --password-stdin "$REGISTRY"
+          
+          # Detect registry type and login accordingly
+          if [[ "$REGISTRY" == *".amazonaws.com"* ]] || [[ "$REGISTRY" == *".ecr."* ]]; then
+            echo "Detected ECR registry, using AWS credentials..."
+            aws ecr get-login-password --region "$REGION" | \
+              docker login --username AWS --password-stdin "$REGISTRY"
+          else
+            echo "Detected non-ECR registry (Nexus/other): $REGISTRY"
+            echo "Using pre-configured Docker credentials from ~/.docker/config.json"
+          fi
           
           # Pull new image
           docker pull "$IMAGE"
@@ -461,10 +469,18 @@ jobs:
             exit 1
           fi
           
-          # Login to ECR
+          # Login to registry (ECR or Nexus)
           REGISTRY=$(echo "$IMAGE" | cut -d/ -f1)
-          aws ecr get-login-password --region "$REGION" | \
-            docker login --username AWS --password-stdin "$REGISTRY"
+          
+          # Detect registry type and login accordingly
+          if [[ "$REGISTRY" == *".amazonaws.com"* ]] || [[ "$REGISTRY" == *".ecr."* ]]; then
+            echo "Detected ECR registry, using AWS credentials..."
+            aws ecr get-login-password --region "$REGION" | \
+              docker login --username AWS --password-stdin "$REGISTRY"
+          else
+            echo "Detected non-ECR registry (Nexus/other): $REGISTRY"
+            echo "Using pre-configured Docker credentials from ~/.docker/config.json"
+          fi
           
           # Pull new image
           docker pull "$IMAGE"
