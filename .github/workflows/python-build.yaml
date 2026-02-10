@@ -161,6 +161,22 @@ jobs:
           python -m pip install --upgrade pip
           ${{ inputs.install_command }}
 
+      # --- INSTALL TEST DEPENDENCIES ---
+      - name: Install Test Dependencies
+        if: inputs.run_tests == true
+        run: |
+          echo "🔍 Checking for test dependencies..."
+          if [[ -f "requirements-dev.txt" ]]; then
+            echo "Installing from requirements-dev.txt"
+            pip install -r requirements-dev.txt
+          elif [[ -f "requirements-test.txt" ]]; then
+            echo "Installing from requirements-test.txt"
+            pip install -r requirements-test.txt
+          else
+            echo "No dev/test requirements file found. Installing pytest defaults."
+            pip install pytest pytest-cov
+          fi
+
       # --- UNIT TEST STEP ---
       - name: Run Unit Tests
         if: inputs.run_tests == true
