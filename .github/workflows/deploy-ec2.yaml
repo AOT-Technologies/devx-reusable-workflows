@@ -269,6 +269,12 @@ jobs:
           done
           IPS=${IPS%,}
           echo "public_ips=$IPS" >> $GITHUB_OUTPUT
+          
+          # Validate SSH Requirements
+          if [[ "${{ inputs.deploy_method }}" == "ssh" ]] && [[ -z "$IPS" ]]; then
+            echo "::error::Deploy method is SSH but no Public IPs found for targets"
+            exit 1
+          fi
 
       # =========================================================================
       # STATE MEASUREMENT (For Rollback)
@@ -578,6 +584,11 @@ jobs:
           done
           
           echo "Successful deployments: $SUCCESS_COUNT"
+          
+          if [[ "$SUCCESS_COUNT" -eq 0 ]]; then
+            echo "::error::Deployment failed: 0 instances were updated"
+            exit 1
+          fi
           
           if [[ -n "$FAILED" ]]; then
             echo "::error::Some deployments failed: ${FAILED%,}"
