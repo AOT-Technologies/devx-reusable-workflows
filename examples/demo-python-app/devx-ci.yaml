@@ -1,0 +1,75 @@
+# DevX CI Configuration for Demo Python Application
+# This demonstrates all features of the reusable workflows
+
+project:
+  language: python
+  version: "3.11"
+  working_directory: "."
+
+build:
+  enabled: true
+  run_tests: true
+  test_script: "python -m pytest"
+  build_script: "pip install wheel && python setup.py bdist_wheel"
+  artifact_path: "dist/*.whl"
+
+security:
+  # SAST: Static Application Security Testing
+  sast:
+    enabled: false
+    tool: sonarqube
+    scan_path: "src"
+    sonar_host_url: "https://code-review.quipohealth.com"
+    sonar_organization: ""
+    sonar_project_key: "DevxWorkflow-PythonApp-Test"
+    fail_on_quality_gate: true
+  
+  # IaC: Not needed for simple Python app
+  iac:
+    enabled: false
+  
+  # Trivy: Container vulnerability scanning
+  trivy:
+    enabled: false
+    severity: CRITICAL
+    fail_on_vuln: false
+    ignore_unfixed: true
+    scanners: vuln,secret,misconfig
+  
+  # SBOM: Software Bill of Materials
+  sbom:
+    enabled: false
+    format: cyclonedx-json
+  
+  # SBOM Scan: Vulnerability analysis
+  sbom_scan:
+    enabled: false
+    severity: medium
+    format: sarif
+
+docker:
+  enabled: true
+  dockerfile: Dockerfile
+  image_name: demo-python-app
+  image_tag: ""                  # Uses git SHA by default
+  
+  # Registry configuration
+  registry_type: nexus           # Pushing images to Nexus
+  
+  platforms: linux/amd64         # Single platform for faster builds
+
+# Sonatype Nexus Configuration
+nexus:
+  url: "https://needfully-footless-wilburn.ngrok-free.dev"
+  repository: "pypi-hosted"       # Native PyPI repository
+  repo_type: "pypi"               # Use twine upload
+  # Docker Registry Info
+  docker_registry_url: "socks-campus-varies-method.trycloudflare.com"
+  docker_repository: "docker-hosted"
+
+# AWS Configuration (required if registry_type: ecr)
+aws:
+  region: ca-central-1
+  role_to_assume: arn:aws:iam::653405621825:role/GitHubActionsRole-test
+
+# test commit 5

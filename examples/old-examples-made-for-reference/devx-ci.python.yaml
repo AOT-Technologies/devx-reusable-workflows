@@ -1,0 +1,26 @@
+# Example DevX CI Config for Python
+project:
+  language: python
+  version: "3.11"
+
+build:
+  run_tests: true
+  build_script: "pip install wheel && python setup.py bdist_wheel"
+  artifact_path: "dist/*.whl"
+
+nexus:
+  url: "https://nexus.example.com"
+  repository: "pypi-hosted"
+  repo_type: "pypi"
+  docker_registry_url: "nexus.example.com:8082"
+
+security:
+  sast:
+    enabled: true
+  trivy:
+    enabled: true
+
+docker:
+  enabled: true
+  image_name: demo-python-app
+  registry_type: nexus

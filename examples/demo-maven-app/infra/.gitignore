@@ -1,0 +1,19 @@
+# Exclude all .tfvars files, which contain secrets
+*.tfvars
+*.tfvars.json
+
+# Local .terraform directories
+**/.terraform/*
+
+# .tfstate files
+*.tfstate
+*.tfstate.*
+
+# override files are usually local overrides
+override.tf
+override.tf.json
+*_override.tf
+*_override.tf.json
+
+# Ignore CLI configuration files
+.terraformrc

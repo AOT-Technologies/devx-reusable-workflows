@@ -1,0 +1,81 @@
+# DevX CI Configuration for Demo Node.js Application
+# This demonstrates all features of the reusable workflows
+
+project:
+  language: node
+  version: "20"
+  working_directory: "."
+
+build:
+  enabled: true
+  run_tests: true                # Run npm test (Jest with coverage)
+  test_script: test
+  run_build: true
+  build_script: "npm run build"  # No need to tar manually if using npm publish
+  artifact_path: ""              # Not needed for npm publish
+
+security:
+  # SAST: Static Application Security Testing
+  sast:
+    enabled: false
+    tool: sonarqube
+    scan_path: "./src"
+    exclude_paths: "node_modules/,tests/,coverage/"
+    sonar_host_url: "https://code-review.quipohealth.com"
+    sonar_organization: ""
+    sonar_project_key: "DevxReusableWorkflow-DemoNodeProject-Test"
+    fail_on_quality_gate: true
+    severity: ERROR              # Block on ERROR level findings
+    fail_on_findings: false      # Fail pipeline if vulnerabilities found
+
+  # IaC: Not needed for simple Node.js app
+  iac:
+    enabled: false
+    working_directory: "infra"
+    frameworks: terraform
+  
+  # Trivy: Container vulnerability scanning
+  trivy:
+    enabled: false
+    severity: CRITICAL
+    fail_on_vuln: false  # Allow vulnerabilities for testing
+    ignore_unfixed: true
+    scanners: vuln,secret,misconfig
+  
+  # SBOM: Software Bill of Materials
+  sbom:
+    enabled: false
+    format: cyclonedx-json       # Standard SBOM format
+  
+  # SBOM Scan: Vulnerability analysis
+  sbom_scan:
+    enabled: false
+    severity: medium             # Report medium and above
+    format: sarif                # Upload to GitHub Security tab
+
+docker:
+  enabled: true
+  dockerfile: Dockerfile
+  image_name: demo-nodejs-app
+  image_tag: ""                  # Uses git SHA by default
+  
+  # Registry configuration
+  registry_type: nexus           # Pushing images to Nexus
+  
+  platforms: linux/amd64         # Single platform for faster builds
+
+# Sonatype Nexus Configuration
+nexus:
+  url: "https://needfully-footless-wilburn.ngrok-free.dev"
+  repository: "npm-hosted"       # Native NPM repository
+  repo_type: "npm"               # Use npm publish
+  # Docker Registry Info
+  docker_registry_url: "distributor-venue-authorized-techniques.trycloudflare.com"
+  docker_repository: "docker-hosted"
+
+# AWS Configuration (required if registry_type: ecr)
+aws:
+  region: ca-central-1
+  role_to_assume: arn:aws:iam::653405621825:role/GitHubActionsRole-test
+
+# Test commit 8

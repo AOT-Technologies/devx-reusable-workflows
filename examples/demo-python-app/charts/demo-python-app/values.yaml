@@ -1,0 +1,45 @@
+# Default values for demo-python-app
+replicaCount: 1
+
+image:
+  repository: array-beauty-beyond-previously.trycloudflare.com/docker-hosted/demo-python-app
+  pullPolicy: Always
+  # tag: "" (set dynamically by CD orchestrator)
+
+imagePullSecrets:
+  - name: nexus-credentials
+
+nameOverride: ""
+fullnameOverride: ""
+
+service:
+  type: ClusterIP
+  port: 5000
+
+ingress:
+  enabled: true
+  className: "alb"
+  annotations:
+    alb.ingress.kubernetes.io/scheme: internet-facing
+    alb.ingress.kubernetes.io/target-type: ip
+  hosts:
+    - host: demo-python.dev.quipohealth.com
+      paths:
+        - path: /
+          pathType: Prefix
+
+resources:
+  limits:
+    cpu: 100m
+    memory: 128Mi
+  requests:
+    cpu: 100m
+    memory: 128Mi
+
+healthCheck:
+  path: /health
+  port: 5000
+
+nodeSelector: {}
+tolerations: []
+affinity: {}

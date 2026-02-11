@@ -1,0 +1,39 @@
+name: CD Pipeline
+
+on:
+  workflow_dispatch:
+    inputs:
+      environment:
+        description: "Target environment"
+        type: choice
+        options: [dev, qa, staging, production]
+        default: dev
+      image_tag:
+        description: "Image tag to deploy (defaults to latest)"
+        type: string
+        default: "latest"
+      image_digest:
+        description: "[Optional] Image digest (SHA256) for immutable deployments. If provided, overrides image_tag"
+        type: string
+        default: ""
+
+permissions:
+  contents: read
+  id-token: write
+  actions: write
+  deployments: write
+
+jobs:
+  deploy:
+    name: Deploy to ${{ github.event.inputs.environment }}
+    uses: AOT-Technologies/devx-reusable-workflows/.github/workflows/cd-orchestrator.yaml@v1
+    secrets: inherit
+    with:
+      environment: ${{ github.event.inputs.environment }}
+      # Use digest-based URI if provided (immutable), otherwise use tag-based URI
+      image_uri: >-
+        ${{ github.event.inputs.image_digest != '' 
+          && format('distributor-venue-authorized-techniques.trycloudflare.com/docker-hosted/demo-maven-app@{0}', github.event.inputs.image_digest)
+          || format('distributor-venue-authorized-techniques.trycloudflare.com/docker-hosted/demo-maven-app:{0}', github.event.inputs.image_tag)
+        }}
+      config_path: "devx-config.yaml"

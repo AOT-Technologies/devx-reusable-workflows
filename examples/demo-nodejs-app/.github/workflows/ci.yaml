@@ -1,0 +1,40 @@
+# Standard CI Workflow for Project Repositories
+# Use this in ALL project repos calling DevX reusable workflows
+#
+# Location: .github/workflows/ci.yaml
+
+name: CI Pipeline
+
+on:
+  push:
+    branches:
+      - main
+      - develop
+      - 'feature/**'
+  pull_request:
+    branches:
+      - main
+      - develop
+
+# ⚠️ IMPORTANT: Do NOT add concurrency here
+# Concurrency is handled in ci-orchestrator.yaml
+# Adding it here causes deadlock!
+
+jobs:
+  ci:
+    name: DevX CI Pipeline
+    uses: AOT-Technologies/devx-reusable-workflows/.github/workflows/ci-orchestrator.yaml@v1
+    with:
+      config_path: devx-ci.yaml
+    secrets: inherit
+
+  cd:
+    name: CD Deployment
+    needs: ci
+    if: github.ref == 'refs/heads/main' && github.event_name == 'push'
+    uses: AOT-Technologies/devx-reusable-workflows/.github/workflows/cd-orchestrator.yaml@v1
+    with:
+      environment: dev
+      image_uri: ${{ needs.ci.outputs.image_uri }}
+      config_path: "devx-config.yaml"
+    secrets: inherit

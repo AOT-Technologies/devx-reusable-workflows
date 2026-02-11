@@ -1,0 +1,27 @@
+name: CI/CD Pipeline
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+    branches: [main]
+  workflow_dispatch:
+
+jobs:
+  ci:
+    name: DevX CI Pipeline
+    uses: AOT-Technologies/devx-reusable-workflows/.github/workflows/ci-orchestrator.yaml@v1
+    with:
+      config_path: devx-ci.yaml
+    secrets: inherit
+
+  cd:
+    name: CD Deployment
+    needs: ci
+    if: github.ref == 'refs/heads/main' && github.event_name == 'push'
+    uses: AOT-Technologies/devx-reusable-workflows/.github/workflows/cd-orchestrator.yaml@v1
+    with:
+      environment: dev
+      image_uri: ${{ needs.ci.outputs.image_uri }}
+      config_path: "devx-config.yaml"
+    secrets: inherit

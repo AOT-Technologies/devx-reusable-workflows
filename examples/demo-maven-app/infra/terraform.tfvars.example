@@ -1,0 +1,28 @@
+aws_region  = "ca-central-1"
+environment = "dev"
+project     = "dexterra"
+
+# Github settings for Amplify
+github_repository = "https://github.com/AOT-Technologies/dexterra-custodial" 
+github_token      = "ghp_xxxxxxxxxxxx" # Your Personal Access Token (Classic) | GitHub Token for Amplify to pull code.
+
+# Database Secrets
+db_name     = "fieldops_poc"
+db_username = "postgres"
+db_password = "ChangeThisToAStrongPassword123!" 
+
+# Backend Secrets
+jwt_secret  = "secret-jwt-key"
+
+openroute_api_key = "xxxx"
+openai_api_key    = "sk-..."
+
+# Domain name config
+hosted_zone_id = "XXXXXXXXXXXXXX"
+
+# Common Tags
+common_tags = {
+  Project     = "dexterra"
+  Environment = "dev"
+  Terraform   = "true"
+}

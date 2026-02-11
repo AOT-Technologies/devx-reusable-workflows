@@ -1,0 +1,37 @@
+# Build output
+target
+*.class
+
+# Maven
+.mvn/wrapper/maven-wrapper.jar
+
+# IDE
+.idea
+*.iml
+.vscode
+.eclipse
+.settings
+.classpath
+.project
+
+# Git
+.git
+.gitignore
+
+# CI/CD
+.github
+devx-ci.yaml
+
+# Documentation
+*.md
+docs
+
+# OS
+.DS_Store
+Thumbs.db
+
+# Logs
+*.log
+
+# Test
+src/test

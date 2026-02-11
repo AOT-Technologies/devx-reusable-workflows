@@ -1,0 +1,32 @@
+# CD Trigger Workflow for demo-nodejs-app
+# This manually triggers the CD pipeline via the orchestrator
+
+name: CD Pipeline
+
+on:
+  workflow_dispatch:
+    inputs:
+      environment:
+        description: "Target environment"
+        type: choice
+        options:
+          - dev
+          - qa
+          - staging
+          - production
+        default: "dev"
+        required: true
+      image_uri:
+        description: "Docker image URI (optional, uses latest from Nexus if empty)"
+        type: string
+        default: ""
+
+jobs:
+  deploy:
+    name: Trigger Deployment
+    uses: AOT-Technologies/devx-reusable-workflows/.github/workflows/cd-orchestrator.yaml@v1
+    with:
+      environment: ${{ inputs.environment }}
+      image_uri: ${{ inputs.image_uri }}
+      config_path: "devx-config.yaml"
+    secrets: inherit

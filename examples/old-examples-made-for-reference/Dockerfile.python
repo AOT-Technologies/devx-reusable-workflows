@@ -1,0 +1,20 @@
+# Optimized Python Dockerfile for DevX Pipeline
+FROM python:3.11-alpine AS builder
+
+WORKDIR /app
+
+# The artifact is downloaded by the CI pipeline.
+ARG ARTIFACT_NAME
+COPY ${ARTIFACT_NAME} ./
+
+# Runtime stage
+FROM python:3.11-alpine
+WORKDIR /app
+
+# Copy wheel from builder and install
+COPY --from=builder /app/*.whl .
+RUN pip install --no-cache-dir *.whl && rm *.whl
+
+EXPOSE 8000
+HEALTHCHECK CMD curl -f http://localhost:8000/health || exit 1
+CMD ["gunicorn", "--bind", "0.0.0.0:8000", "app:app"]

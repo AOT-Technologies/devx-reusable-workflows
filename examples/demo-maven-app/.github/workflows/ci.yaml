@@ -1,0 +1,37 @@
+name: CI/CD Pipeline
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+    branches: [main]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+  security-events: write
+  actions: write
+  id-token: write
+  packages: write
+  pull-requests: write
+  deployments: write
+
+jobs:
+  ci:
+    name: Build & Security
+    uses: AOT-Technologies/devx-reusable-workflows/.github/workflows/ci-orchestrator.yaml@v1
+    secrets: inherit
+
+  # Automated Trigger: automatically trigger EC2 deployment to dev environment after successful CI build on main branch
+  deploy-dev:
+    name: Deploy to Dev (EC2)
+    needs: ci
+    if: github.ref == 'refs/heads/main' && needs.ci.outputs.image_uri != ''
+    uses: AOT-Technologies/devx-reusable-workflows/.github/workflows/cd-orchestrator.yaml@v1
+    with:
+      environment: dev
+      # Use image_uri from CI (includes the exact tag/digest that was built)
+      image_uri: ${{ needs.ci.outputs.image_uri }}
+      config_path: devx-config.yaml
+    secrets: inherit
+

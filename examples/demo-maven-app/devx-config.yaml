@@ -1,0 +1,47 @@
+# DevX CD Configuration for demo-maven-app (EC2 Deployment)
+# This configuration is for EC2-based deployments using SSH method
+
+deployment:
+  enabled: true
+  target: ec2
+  
+  environments:
+    dev:
+      enabled: true
+      region: ca-central-1
+      
+      # EC2 Deployment Settings
+      deploy_method: ssh
+      target_type: instance-ids
+      instance_ids: i-07c20def55d6e203b
+      
+      # SSH Configuration
+      ssh_user: ec2-user
+      ssh_port: 22
+      
+      # Docker Compose Settings
+      docker_compose_path: /app/docker-compose.yaml
+      service_name: demo-maven-app
+      
+      # Health Check Configuration
+      health_check:
+        enabled: true
+        endpoint: /actuator/health
+        type: url
+        # URL will be constructed as http://<instance-public-ip>:8080/actuator/health
+        retries: 10
+        retry_interval: 15
+      
+      # Rollback Settings
+      auto_rollback: true
+      
+      # Notifications
+      notifications:
+        enabled: true
+
+# AWS Configuration (OIDC for GitHub Actions)
+aws:
+  default_region: ca-central-1
+  role_to_assume: arn:aws:iam::653405621825:role/GitHubActionsRole-test
+
+# Test commit 11

@@ -1,0 +1,9 @@
+# Web Framework
+flask==3.0.0
+gunicorn==21.2.0
+
+# Development
+pytest==7.4.3
+pytest-cov==4.1.0
+flake8==7.0.0
+black==23.12.1

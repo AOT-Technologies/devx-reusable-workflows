@@ -1,0 +1,175 @@
+# =============================================================================
+# DevX Configuration File - Complete CI/CD Example
+# =============================================================================
+# This file demonstrates both CI and CD configuration.
+# Place at repository root as 'devx-config.yaml'
+# =============================================================================
+
+# -----------------------------------------------------------------------------
+# PROJECT METADATA
+# -----------------------------------------------------------------------------
+project:
+  name: "my-application"
+  language: "node"          # node, python, maven
+
+# -----------------------------------------------------------------------------
+# AWS CONFIGURATION
+# -----------------------------------------------------------------------------
+aws:
+  default_region: "us-east-1"
+  role_to_assume: "arn:aws:iam::123456789012:role/github-actions-role"
+
+# -----------------------------------------------------------------------------
+# DOCKER CONFIGURATION
+# -----------------------------------------------------------------------------
+docker:
+  enabled: true
+  registry_type: "ecr"      # ecr, generic, nexus
+  image_name: "my-application"
+  dockerfile_path: "./Dockerfile"
+  context: "."
+
+# -----------------------------------------------------------------------------
+# CI CONFIGURATION (builds)
+# -----------------------------------------------------------------------------
+ci:
+  build:
+    enabled: true
+    node_version: "20"
+    run_tests: true
+    test_script: "test"
+    build_script: "build"
+  
+  # Security Gates
+  security:
+    sast:
+      enabled: true
+      tool: "semgrep"
+    trivy:
+      enabled: true
+      severity_threshold: "CRITICAL,HIGH"
+    sbom:
+      enabled: true
+    iac:
+      enabled: true
+
+# -----------------------------------------------------------------------------
+# CD CONFIGURATION (deployments)
+# -----------------------------------------------------------------------------
+deployment:
+  enabled: true
+  
+  # Deployment target: eks, ec2, ecs
+  target: "eks"
+  
+  # Helm configuration (for EKS)
+  helm:
+    chart_path: "./charts/my-application"
+    release_name: "my-app"
+  
+  # Health check settings
+  health_check:
+    enabled: true
+    endpoint: "/health"
+    timeout: 30
+    retries: 5
+  
+  # Rollback settings
+  rollback:
+    auto_rollback: true
+    revision_history: 5
+  
+  # Notifications
+  notifications:
+    enabled: true
+    channels:
+      - google_chat  # Google Chat webhook
+  
+  # Environment-specific configuration
+  environments:
+    # Development environment
+    dev:
+      enabled: true
+      region: "us-east-1"
+      cluster_name: "dev-cluster"
+      namespace: "dev"
+      values_file: "./charts/values-dev.yaml"
+      replicas: 1
+      auto_deploy: true  # Deploy on merge to develop
+    
+    # QA environment
+    qa:
+      enabled: true
+      region: "us-east-1"
+      cluster_name: "qa-cluster"
+      namespace: "qa"
+      values_file: "./charts/values-qa.yaml"
+      replicas: 2
+      auto_deploy: false
+    
+    # Staging environment
+    staging:
+      enabled: true
+      region: "us-east-1"
+      cluster_name: "staging-cluster"
+      namespace: "staging"
+      values_file: "./charts/values-staging.yaml"
+      replicas: 2
+      auto_deploy: false
+    
+    # Production environment
+    production:
+      enabled: true
+      region: "us-east-1"
+      cluster_name: "prod-cluster"
+      namespace: "production"
+      values_file: "./charts/values-prod.yaml"
+      replicas: 3
+      auto_deploy: false
+      # Multi-region configuration
+      multi_region:
+        enabled: true
+        regions:
+          - region: "us-west-2"
+            cluster_name: "prod-cluster-west"
+          - region: "eu-west-1"
+            cluster_name: "prod-cluster-eu"
+
+# -----------------------------------------------------------------------------
+# ECS CONFIGURATION (alternative to EKS)
+# -----------------------------------------------------------------------------
+# Uncomment below if using ECS instead of EKS
+#
+# deployment:
+#   enabled: true
+#   target: "ecs"
+#   
+#   environments:
+#     dev:
+#       enabled: true
+#       region: "us-east-1"
+#       cluster_name: "dev-ecs-cluster"
+#       service_name: "my-app-service"
+#       task_definition_family: "my-app-task"
+#       container_name: "app"
+
+# -----------------------------------------------------------------------------
+# EC2 CONFIGURATION (alternative to EKS)
+# -----------------------------------------------------------------------------
+# Uncomment below if using EC2 instead of EKS
+#
+# deployment:
+#   enabled: true
+#   target: "ec2"
+#   
+#   environments:
+#     dev:
+#       enabled: true
+#       region: "us-east-1"
+#       deploy_method: "ssh"        # 'ssm' or 'ssh' (ssm = AWS Systems Manager, ssh = direct SSH)
+#       target_type: "tag"          # 'instance-ids', 'tag', or 'asg'
+#       target_tag_key: "Environment"
+#       target_tag_value: "dev"
+#       ssh_user: "ec2-user"        # Required for SSH method
+#       docker_compose_path: "/app/docker-compose.yaml"
+#       service_name: "app"
