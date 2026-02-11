@@ -3,7 +3,6 @@
 **CI/CD Workflows for GitHub Actions**
 
 [![Version](https://img.shields.io/badge/version-1.0.0-blue.svg)](https://github.com/AOT-Technologies/devx-reusable-workflows/releases)
-[![License](https://img.shields.io/badge/license-MIT-green.svg)](LICENSE)
 
 A centralized collection of reusable GitHub Actions workflows for standardized, secure CI/CD across AOT projects.
 
