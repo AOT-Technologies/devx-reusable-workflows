@@ -127,10 +127,10 @@ secrets: inherit
 
 | Example | Description |
 |---------|-------------|
-| [examples/nodejs-express/](examples/nodejs-express/) | Node.js Express API with Docker |
-| [examples/python-fastapi/](examples/python-fastapi/) | Python FastAPI with PyPI |
-| [examples/java-springboot/](examples/java-springboot/) | Java Spring Boot with Maven |
-| [examples/docker-only/](examples/docker-only/) | Docker-only builds (skip language build) |
+| [examples/demo-maven-app/](examples/nodejs-express/) | Node.js Express API with Docker |
+| [examples/python-fastapi/](examples/demo-maven-app/) | Python FastAPI with PyPI |
+| [examples/java-springboot/](examples/demo-python-app/) | Java Spring Boot with Maven |
+
 
 ---
 
