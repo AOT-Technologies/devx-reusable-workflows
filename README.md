@@ -127,9 +127,9 @@ secrets: inherit
 
 | Example | Description |
 |---------|-------------|
-| [examples/demo-maven-app/](examples/nodejs-express/) | Node.js Express API with Docker |
-| [examples/python-fastapi/](examples/demo-maven-app/) | Python FastAPI with PyPI |
-| [examples/java-springboot/](examples/demo-python-app/) | Java Spring Boot with Maven |
+| [examples/demo-nodejs-app/](examples/demo-nodejs-app/) | Node.js Express API with Docker |
+| [examples/demo-maven-app/](examples/demo-maven-app/) | Maven with Nexus |
+| [examples/demo-python-app/](examples/demo-python-app/) | Python with PyPI |
 
 
 ---
