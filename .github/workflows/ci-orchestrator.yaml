@@ -17,6 +17,10 @@ on:
         description: "Path to DevX CI config file"
         type: string
         default: "devx-ci.yaml"
+      auto_merge:
+        description: "Automatically merge PR if all checks pass"
+        type: boolean
+        default: false
     secrets:
       # Pass through for Docker Hub / Generic Registries
       registry_username:
@@ -374,11 +378,23 @@ jobs:
       output_format: ${{ fromJson(needs.load-config.outputs.config).security.sbom_scan.format || 'sarif' }}
 
   # ---------------------------------------------------------------------------
+  # 6.5 AUTO-MERGE (Optional for PRs)
+  # ---------------------------------------------------------------------------
+  auto-merge:
+    needs: load-config
+    if: |
+      github.event_name == 'pull_request' &&
+      inputs.auto_merge == true
+    uses: ./.github/workflows/auto-merge.yaml
+    secrets:
+      GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+
+  # ---------------------------------------------------------------------------
   # 7. PIPELINE SUMMARY (Always runs for observability)
   # ---------------------------------------------------------------------------
   summary:
     if: always()
-    needs: [load-config, sast-semgrep, sast-sonarqube, iac, build-node, build-python, build-maven, docker, trivy, sbom, sbom-scan]
+    needs: [load-config, sast-semgrep, sast-sonarqube, iac, build-node, build-python, build-maven, docker, trivy, sbom, sbom-scan, auto-merge]
     runs-on: ubuntu-latest
     timeout-minutes: 2
     

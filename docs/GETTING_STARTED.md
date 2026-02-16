@@ -374,6 +374,29 @@ When you push code, this happens:
    └─ Report overall status
 ```
 
+## Enabling Auto-merge
+update the triggers in your ci.yaml caller file:
+```yaml
+on:
+  push:
+    branches: [development, main]  # Build & Deploy on merge to these
+  pull_request:
+    branches: [development]        # Build Only on PR to dev
+
+jobs:
+  ci:
+    uses: AOT-Technologies/devx-reusable-workflows/.github/workflows/ci-orchestrator.yaml@v1
+    with:
+      config_path: devx-ci.yaml
+      auto_merge: true             # 👈 Simply add this line!
+    secrets: inherit
+```
+
+you must toggle two settings in your GitHub Repository:
+
+1. Repository Settings: Go to General -> Pull Requests -> Check "Allow auto-merge".
+2. Branch Protection: Set a rule for the development branch to "Require status checks to pass" and select the "Orchestrator: CI Pipeline" check.
+
 ---
 
 ## 🔐 Viewing Security Results

@@ -156,6 +156,12 @@ All security scan results automatically upload to **GitHub Security → Code sca
 
 ---
 
+## 🏷️ GitHub Branching Strategy
+- main: Production-ready code only.
+- development: Integration branch for new features. CD triggers here for dev/qa environments.
+- feature/*: Individual work branches linked to Jira tickets.
+
+---
 ## 📄 License
 
 MIT License - See [LICENSE](LICENSE) for details.
