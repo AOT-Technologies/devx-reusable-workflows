@@ -401,3 +401,28 @@ jobs:
           else
             echo "### ❌ Deployment: **FAILED**" >> $GITHUB_STEP_SUMMARY
           fi
+
+      - name: Ingress & ALB Diagnostics
+        if: always() && inputs.dry_run != true
+        run: |
+          echo "🔍 Ingress & ALB Routing Diagnostics"
+          echo "====================================="
+          
+          NAMESPACE="${{ inputs.namespace }}"
+          RELEASE="${{ inputs.helm_release_name }}"
+          
+          echo ""
+          echo "📋 Ingress Configuration:"
+          kubectl get ingress -n "$NAMESPACE" -l "app.kubernetes.io/instance=$RELEASE" -o yaml || true
+          
+          echo ""
+          echo "🎯 Target Group Bindings:"
+          kubectl get targetgroupbindings -n "$NAMESPACE" -o wide 2>/dev/null || echo "⚠️  No TargetGroupBindings CRD found"
+          
+          echo ""
+          echo "🔌 Service Endpoints:"
+          kubectl get endpoints -n "$NAMESPACE" -l "app.kubernetes.io/instance=$RELEASE" || true
+          
+          echo ""
+          echo "📦 Pod IPs:"
+          kubectl get pods -n "$NAMESPACE" -l "app.kubernetes.io/instance=$RELEASE" -o wide || true
