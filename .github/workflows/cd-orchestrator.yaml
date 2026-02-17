@@ -572,7 +572,7 @@ jobs:
     secrets:
       GOOGLE_CHAT_WEBHOOK: ${{ secrets.GOOGLE_CHAT_WEBHOOK }}
     with:
-      status: ${{ needs.health-check.result == 'success' && 'success' || (needs.rollback.result == 'success' && 'rollback' || 'failure') }}
+      status: ${{ (needs.health-check.result == 'success' || (needs.health-check.result == 'skipped' && (needs.deploy-eks.result == 'success' || needs.deploy-ec2.result == 'success' || needs.deploy-ecs.result == 'success'))) && 'success' || (needs.rollback.result == 'success' && 'rollback' || 'failure') }}
       environment: ${{ inputs.environment }}
       image_uri: ${{ inputs.image_uri }}
 
@@ -601,6 +601,7 @@ jobs:
           echo "| **Target** | ${{ needs.validate-and-load.outputs.deployment_target }} |" >> $GITHUB_STEP_SUMMARY
           echo "| **Image** | \`${{ inputs.image_uri }}\` |" >> $GITHUB_STEP_SUMMARY
           echo "| **Dry Run** | ${{ inputs.dry_run }} |" >> $GITHUB_STEP_SUMMARY
+          echo "| **App URL** | [${{ needs.deploy-eks.outputs.url }}](${{ needs.deploy-eks.outputs.url }}) |" >> $GITHUB_STEP_SUMMARY
           echo "" >> $GITHUB_STEP_SUMMARY
           
           echo "### Stage Results" >> $GITHUB_STEP_SUMMARY
@@ -618,7 +619,7 @@ jobs:
       - name: Determine Final Status
         id: status
         run: |
-          if [[ "${{ needs.health-check.result }}" == "success" ]]; then
+          if [[ "${{ needs.health-check.result }}" == "success" ]] || [[ "${{ needs.health-check.result }}" == "skipped" && ("${{ needs.deploy-eks.result }}" == "success" || "${{ needs.deploy-ec2.result }}" == "success" || "${{ needs.deploy-ecs.result }}" == "success") ]]; then
             echo "final_status=success" >> $GITHUB_OUTPUT
             echo "### Deployment Status: **SUCCESS**" >> $GITHUB_STEP_SUMMARY
           elif [[ "${{ needs.rollback.result }}" == "success" ]]; then

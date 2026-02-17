@@ -100,6 +100,9 @@ on:
       manifest:
         description: "Applied manifest summary"
         value: ${{ jobs.deploy.outputs.manifest }}
+      url:
+        description: "Deployment URL"
+        value: ${{ jobs.deploy.outputs.url }}
 
   workflow_dispatch:
     inputs:
@@ -155,6 +158,7 @@ jobs:
       status: ${{ steps.result.outputs.status }}
       revision: ${{ steps.helm_deploy.outputs.revision }}
       manifest: ${{ steps.helm_deploy.outputs.manifest }}
+      url: ${{ steps.deploy_url.outputs.url }}
 
     steps:
       - name: Checkout Code
