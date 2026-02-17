@@ -347,11 +347,23 @@ jobs:
       - name: Generate Deployment URL
         id: deploy_url
         run: |
-          # Get ingress/service URL if available
+          # Try to get host from ingress rules first
           INGRESS_HOST=$(kubectl get ingress -n "${{ inputs.namespace }}" \
             -l "app.kubernetes.io/instance=${{ inputs.helm_release_name }}" \
             -o jsonpath='{.items[0].spec.rules[0].host}' 2>/dev/null || echo "")
           
+          # If no host, try to get ALB DNS name from status
+          if [[ -z "$INGRESS_HOST" ]]; then
+             INGRESS_ALB=$(kubectl get ingress -n "${{ inputs.namespace }}" \
+              -l "app.kubernetes.io/instance=${{ inputs.helm_release_name }}" \
+              -o jsonpath='{.items[0].status.loadBalancer.ingress[0].hostname}' 2>/dev/null || echo "")
+             
+             if [[ -n "$INGRESS_ALB" ]]; then
+               echo "url=http://$INGRESS_ALB" >> $GITHUB_OUTPUT
+               exit 0
+             fi
+          fi
+
           if [[ -n "$INGRESS_HOST" ]]; then
             echo "url=https://$INGRESS_HOST" >> $GITHUB_OUTPUT
           elif [[ -n "${{ inputs.ingress_domain }}" ]]; then
