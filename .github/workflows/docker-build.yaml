@@ -237,6 +237,7 @@ jobs:
       # ----------------------------------------------------------------------
       - name: Download Artifact from Nexus
         if: inputs.nexus_artifact_path != ''
+        id: download
         env:
           NEXUS_BASE_URL: ${{ inputs.nexus_artifact_base_url }}
           NEXUS_REPO: ${{ inputs.nexus_artifact_repo }}
@@ -261,6 +262,7 @@ jobs:
           if [[ $? -eq 0 ]]; then
             echo "✅ Downloaded: ${FILENAME}"
             ls -lh "${FILENAME}"
+            echo "artifact_name=${FILENAME}" >> $GITHUB_OUTPUT
           else
             echo "❌ Failed to download artifact from ${ARTIFACT_URL}"
             exit 1
@@ -370,12 +372,26 @@ jobs:
         id: parse-build-args
         env:
           BUILD_ARGS: ${{ inputs.build_args }}
+          DOWNLOADED_ARTIFACT: ${{ steps.download.outputs.artifact_name }}
         run: |
-          if [[ -n "$BUILD_ARGS" ]]; then
+          # Start with the input build args
+          COMBINED_ARGS="$BUILD_ARGS"
+          
+          # If an artifact was downloaded, inject ARTIFACT_NAME automatically
+          if [[ -n "$DOWNLOADED_ARTIFACT" ]]; then
+            echo "📦 Injecting ARTIFACT_NAME=$DOWNLOADED_ARTIFACT into build-args"
+            if [[ -n "$COMBINED_ARGS" ]]; then
+              COMBINED_ARGS="${COMBINED_ARGS}"$'\n'"ARTIFACT_NAME=$DOWNLOADED_ARTIFACT"
+            else
+              COMBINED_ARGS="ARTIFACT_NAME=$DOWNLOADED_ARTIFACT"
+            fi
+          fi
+          
+          if [[ -n "$COMBINED_ARGS" ]]; then
             # Convert multiline string to comma-separated for build-push-action
-            ARGS=$(echo "$BUILD_ARGS" | tr '\n' ',' | sed 's/,$//')
+            ARGS=$(echo "$COMBINED_ARGS" | tr '\n' ',' | sed 's/,$//')
             echo "args=$ARGS" >> $GITHUB_OUTPUT
-            echo "📋 Build Args: $ARGS"
+            echo "📋 Combined Build Args: $ARGS"
           else
             echo "args=" >> $GITHUB_OUTPUT
           fi
