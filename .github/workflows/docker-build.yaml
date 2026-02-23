@@ -1,8 +1,14 @@
 name: "Module: Docker Build & Push (Universal)"
 # ------------------------------------------------------------------------------
-# UNIVERSAL Docker build module.
+# UNIVERSAL Docker build module with SMART VERSIONING
 #
-# MODES:
+# VERSIONING STRATEGY:
+# - feature/* branches    → feature-<name>-<short-sha>
+# - development branch    → dev-<short-sha>
+# - release/X.Y.Z branches → X.Y.Z-rc<run-number>  (Release Candidates)
+# - Other branches        → <short-sha>
+#
+# REGISTRY MODES:
 # 1. 'ecr': Uses AWS OIDC (No keys). Requires 'role_to_assume'.
 # 2. 'generic': Uses Username/Password. Works with Docker Hub, GHCR.
 # 3. 'nexus': Uses Nexus Docker registry.
@@ -25,7 +31,7 @@ on:
         required: true
         type: string
       image_tag:
-        description: "Tag to apply (defaults to git short SHA)"
+        description: "Tag to apply (defaults to smart versioning based on branch)"
         type: string
         default: "" 
 
@@ -125,7 +131,7 @@ on:
         type: string
         required: true
       image_tag:
-        description: "Image tag"
+        description: "Image tag (leave empty for smart versioning)"
         type: string
         default: ""
       registry_type:
@@ -152,8 +158,12 @@ on:
         description: "Nexus URL (nexus mode)"
         type: string
         default: ""
+      nexus_docker_repo:
+        description: "Nexus Docker repository"
+        type: string
+        default: "docker-hosted"
       build_args:
-        description: "Build arguments"
+        description: "Build arguments (KEY=VALUE, one per line)"
         type: string
         default: ""
       platforms:
@@ -162,127 +172,35 @@ on:
         default: "linux/amd64"
 
 permissions:
-  id-token: write       # REQUIRED: For OIDC (ECR)
-  contents: read        # REQUIRED: To checkout code
-  actions: write        # REQUIRED: To write cache
-  packages: write       # REQUIRED: If pushing to GHCR
+  contents: read
+  id-token: write  # AWS OIDC
+  packages: write  # GHCR push
+  actions: write   # Artifact uploads
 
 jobs:
   build-push:
     runs-on: ubuntu-latest
-    timeout-minutes: 45
-    defaults:
-      run:
-        working-directory: ${{ inputs.working_directory }}
-
+    timeout-minutes: 30
     outputs:
-      image_uri: ${{ steps.set_output.outputs.image_uri }}
-      image_digest: ${{ steps.set_output.outputs.image_digest }}
+      image_uri: ${{ steps.meta.outputs.image_uri }}
+      image_digest: ${{ steps.build.outputs.digest }}
 
     steps:
+      # ----------------------------------------------------------------------
+      # 1. SETUP
+      # ----------------------------------------------------------------------
       - name: Checkout Code
         uses: actions/checkout@v4.1.1
 
-      # ------------------------------------------------------------------------
-      # DIRECT ARTIFACT DOWNLOAD (Optimized Flow)
-      # ------------------------------------------------------------------------
-      - name: Download Artifact from Nexus
-        if: inputs.registry_type == 'nexus' && inputs.nexus_artifact_path != ''
-        id: download
-        env:
-          NEXUS_USER: ${{ secrets.NEXUS_USERNAME }}
-          NEXUS_PASS: ${{ secrets.NEXUS_PASSWORD }}
-          ARTIFACT_PATH: ${{ inputs.nexus_artifact_path }}
-          BASE_URL: ${{ inputs.nexus_artifact_base_url }}
-          REPO: ${{ inputs.nexus_artifact_repo }}
-        run: |
-          echo "📥 Downloading artifact for Docker context..."
-          
-          # Extract filename from path
-          ARTIFACT_NAME=$(basename "$ARTIFACT_PATH")
-          echo "artifact_name=$ARTIFACT_NAME" >> $GITHUB_OUTPUT
-          
-          FULL_URL="${BASE_URL}/repository/${REPO}/${ARTIFACT_PATH}" # URL logged may contain potential credential path | Mask or remove the echo if needed
-          echo "Source: $FULL_URL"
-          echo "Target: ./$ARTIFACT_NAME"
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@v3.0.0
 
-          # run: |
-          #   MASKED_URL=$(echo "$FULL_URL" | sed 's|://[^@]*@|://***:***@|g')
-          #   echo "URL: $MASKED_URL"
-          
-          # Use curl to download
-          HTTP_STATUS=$(curl -f -s \
-            -u "$NEXUS_USER:$NEXUS_PASS" \
-            -o "./$ARTIFACT_NAME" \
-            -w "%{http_code}" \
-            "$FULL_URL" 2>&1) || HTTP_STATUS="FAILED"
-          
-          if [[ "$HTTP_STATUS" == "200" && -f "./$ARTIFACT_NAME" ]]; then
-            echo "✅ Artifact downloaded successfully."
-            ls -lh "./$ARTIFACT_NAME"
-          else
-            echo "::error::Failed to download artifact from Nexus (HTTP $HTTP_STATUS)"
-            exit 1
-          fi
-
-      # ------------------------------------------------------------------------
-      # INPUT VALIDATION
-      # ------------------------------------------------------------------------
-      - name: Validate Inputs
-        env:
-          REGISTRY_TYPE: ${{ inputs.registry_type }}
-          ROLE_ARN: ${{ inputs.role_to_assume }}
-          REGISTRY_URL: ${{ inputs.registry_url }}
-          REG_USER: ${{ secrets.registry_username }}
-          REG_PASS: ${{ secrets.registry_password }}
-          NEXUS_URL: ${{ inputs.nexus_url }}
-          NEXUS_USER: ${{ secrets.NEXUS_USERNAME }}
-          NEXUS_PASS: ${{ secrets.NEXUS_PASSWORD }}
-        run: |
-          # Validate ECR mode requirements
-          if [[ "$REGISTRY_TYPE" == "ecr" ]]; then
-            if [[ -z "$ROLE_ARN" ]]; then
-              echo "::error::ERROR: 'role_to_assume' is required when registry_type is 'ecr'"
-              exit 1
-            fi
-          fi
-          
-          # Validate Generic mode requirements
-          if [[ "$REGISTRY_TYPE" == "generic" ]]; then
-            if [[ -z "$REGISTRY_URL" ]]; then
-              echo "::error::ERROR: 'registry_url' is required when registry_type is 'generic'"
-              exit 1
-            fi
-            if [[ -z "$REG_USER" ]] || [[ -z "$REG_PASS" ]]; then
-              echo "::error::ERROR: 'registry_username' and 'registry_password' secrets are required for generic mode"
-              exit 1
-            fi
-          fi
-          
-          # Validate Nexus mode requirements
-          if [[ "$REGISTRY_TYPE" == "nexus" ]]; then
-            if [[ -z "$NEXUS_URL" ]]; then
-              echo "::error::ERROR: 'nexus_url' is required when registry_type is 'nexus'"
-              exit 1
-            fi
-            if [[ -z "$NEXUS_USER" ]] || [[ -z "$NEXUS_PASS" ]]; then
-              echo "::error::ERROR: NEXUS_USERNAME and NEXUS_PASSWORD secrets are required for nexus mode"
-              exit 1
-            fi
-          fi
-          
-          # Validate registry_type value
-          if [[ "$REGISTRY_TYPE" != "ecr" ]] && [[ "$REGISTRY_TYPE" != "generic" ]] && [[ "$REGISTRY_TYPE" != "nexus" ]]; then
-            echo "::error::ERROR: registry_type must be 'ecr', 'generic', or 'nexus', got: '$REGISTRY_TYPE'"
-            exit 1
-          fi
-          
-          echo "✅ Input validation passed"
-
-      # ------------------------------------------------------------------------
-      # STRATEGY A: AWS ECR (OIDC)
-      # ------------------------------------------------------------------------
-      - name: Configure AWS Credentials
+      # ----------------------------------------------------------------------
+      # 2. REGISTRY AUTHENTICATION (Strategy Pattern)
+      # ----------------------------------------------------------------------
+      
+      # MODE A: AWS ECR (OIDC - No Keys)
+      - name: Configure AWS Credentials (OIDC)
         if: inputs.registry_type == 'ecr'
         uses: aws-actions/configure-aws-credentials@v4.0.2
         with:
@@ -294,40 +212,70 @@ jobs:
         id: login-ecr
         uses: aws-actions/amazon-ecr-login@v2.0.1
 
-      # ------------------------------------------------------------------------
-      # STRATEGY B: GENERIC (Docker Hub / GHCR)
-      # ------------------------------------------------------------------------
+      # MODE B: Generic Registry (Docker Hub, GHCR, etc.)
       - name: Login to Generic Registry
         if: inputs.registry_type == 'generic'
-        id: login-generic
         uses: docker/login-action@v3.0.0
         with:
           registry: ${{ inputs.registry_url }}
           username: ${{ secrets.registry_username }}
           password: ${{ secrets.registry_password }}
 
-      # ------------------------------------------------------------------------
-      # STRATEGY C: NEXUS DOCKER REGISTRY
-      # ------------------------------------------------------------------------
+      # MODE C: Nexus Docker Registry
       - name: Login to Nexus Docker Registry
         if: inputs.registry_type == 'nexus'
-        id: login-nexus
         uses: docker/login-action@v3.0.0
         with:
           registry: ${{ inputs.nexus_url }}
           username: ${{ secrets.NEXUS_USERNAME }}
           password: ${{ secrets.NEXUS_PASSWORD }}
 
-      # ------------------------------------------------------------------------
-      # SHARED: SETUP BUILDX
-      # ------------------------------------------------------------------------
-      - name: Set up Docker Buildx
-        uses: docker/setup-buildx-action@v3.0.0
+      # ----------------------------------------------------------------------
+      # 3. NEXUS ARTIFACT DOWNLOAD (Optional Performance Optimization)
+      # If artifacts are pre-built and uploaded to Nexus, download them
+      # directly into the Docker build context instead of rebuilding.
+      # ----------------------------------------------------------------------
+      - name: Download Artifact from Nexus
+        if: inputs.nexus_artifact_path != ''
+        env:
+          NEXUS_BASE_URL: ${{ inputs.nexus_artifact_base_url }}
+          NEXUS_REPO: ${{ inputs.nexus_artifact_repo }}
+          ARTIFACT_PATH: ${{ inputs.nexus_artifact_path }}
+          NEXUS_USER: ${{ secrets.NEXUS_USERNAME }}
+          NEXUS_PASS: ${{ secrets.NEXUS_PASSWORD }}
+        run: |
+          echo "📦 Downloading artifact from Nexus..."
+          
+          # Construct full URL: BASE_URL/repository/REPO/PATH
+          ARTIFACT_URL="${NEXUS_BASE_URL}/repository/${NEXUS_REPO}/${ARTIFACT_PATH}"
+          
+          # Extract filename from path
+          FILENAME=$(basename "$ARTIFACT_PATH")
+          
+          # Download with authentication
+          curl -u "${NEXUS_USER}:${NEXUS_PASS}" \
+               -f \
+               -o "${FILENAME}" \
+               "${ARTIFACT_URL}"
+          
+          if [[ $? -eq 0 ]]; then
+            echo "✅ Downloaded: ${FILENAME}"
+            ls -lh "${FILENAME}"
+          else
+            echo "❌ Failed to download artifact from ${ARTIFACT_URL}"
+            exit 1
+          fi
 
+      # ----------------------------------------------------------------------
+      # 4. SMART VERSIONING METADATA
+      # Detects branch type and generates appropriate image tags
+      # ----------------------------------------------------------------------
       - name: Calculate Metadata
         id: meta
         env:
           IMAGE_TAG: ${{ inputs.image_tag }}
+          GITHUB_REF: ${{ github.ref }}
+          GITHUB_RUN_NUMBER: ${{ github.run_number }}
           REGISTRY_TYPE: ${{ inputs.registry_type }}
           NEXUS_URL: ${{ inputs.nexus_url }}
           NEXUS_DOCKER_REPO: ${{ inputs.nexus_docker_repo }}
@@ -335,80 +283,131 @@ jobs:
           ECR_REGISTRY: ${{ steps.login-ecr.outputs.registry }}
           GENERIC_REGISTRY: ${{ inputs.registry_url }}
         run: |
-          # 1. Determine Tag
-          if [[ -n "$IMAGE_TAG" ]]; then
-            TAG="$IMAGE_TAG"
-          else
-            TAG=$(git rev-parse --short HEAD)
-          fi
+          echo "🏷️  SMART VERSIONING - Branch Detection"
+          echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
           
-          # 2. Determine Registry Base URL and construct Full URI
-          if [[ "$REGISTRY_TYPE" == "nexus" ]]; then
-            REGISTRY="$NEXUS_URL"
-            FULL_URI="${REGISTRY}/${NEXUS_DOCKER_REPO}/${IMAGE_NAME}:$TAG"
-          elif [[ "$REGISTRY_TYPE" == "ecr" ]]; then
-            REGISTRY="$ECR_REGISTRY"
-            FULL_URI="$REGISTRY/${IMAGE_NAME}:$TAG"
+          # 1. DETERMINE TAG WITH BRANCH-AWARE LOGIC
+          if [[ -n "$IMAGE_TAG" ]]; then
+            # Explicit tag from input (manual override or config)
+            TAG="$IMAGE_TAG"
+            echo "🎯 Explicit tag provided: $TAG"
+          
+          elif [[ "$GITHUB_REF" =~ ^refs/heads/release/(.+)$ ]]; then
+            # RELEASE BRANCH: Extract version and append RC number
+            VERSION="${BASH_REMATCH[1]}"
+            # Strip leading 'v' if present (release/v2.1.0 → 2.1.0)
+            VERSION="${VERSION#v}"
+            TAG="${VERSION}-rc${GITHUB_RUN_NUMBER}"
+            echo "📦 Release branch detected: $GITHUB_REF"
+            echo "🎯 Building release candidate: $TAG"
+            echo "   (Run #${GITHUB_RUN_NUMBER} on this release branch)"
+          
+          elif [[ "$GITHUB_REF" == "refs/heads/development" || "$GITHUB_REF" == "refs/heads/develop" ]]; then
+            # DEVELOPMENT BRANCH: Prefix with 'dev-'
+            SHORT_SHA=$(git rev-parse --short HEAD)
+            TAG="dev-${SHORT_SHA}"
+            echo "🔧 Development branch build: $TAG"
+          
+          elif [[ "$GITHUB_REF" =~ ^refs/heads/feature/(.+)$ ]]; then
+            # FEATURE BRANCH: Sanitized name + short SHA
+            FEATURE_NAME="${BASH_REMATCH[1]}"
+            # Replace slashes and other special chars with hyphens
+            FEATURE_NAME=$(echo "$FEATURE_NAME" | sed 's|[^a-zA-Z0-9]|-|g')
+            SHORT_SHA=$(git rev-parse --short HEAD)
+            TAG="feature-${FEATURE_NAME}-${SHORT_SHA}"
+            echo "🚀 Feature branch build: $TAG"
+          
           else
-            REGISTRY="$GENERIC_REGISTRY"
-            if [[ -z "$REGISTRY" ]]; then
-              FULL_URI="docker.io/${IMAGE_NAME}:$TAG"
-            elif [[ "$REGISTRY" == "docker.io" ]]; then
-              FULL_URI="docker.io/${IMAGE_NAME}:$TAG"
-            else
-              FULL_URI="$REGISTRY/${IMAGE_NAME}:$TAG"
-            fi
+            # FALLBACK: Short SHA (for main, hotfix, or any other branch)
+            TAG=$(git rev-parse --short HEAD)
+            echo "⚙️  Standard build (SHA): $TAG"
           fi
           
           echo "tag=$TAG" >> $GITHUB_OUTPUT
-          echo "full_uri=$FULL_URI" >> $GITHUB_OUTPUT
-          echo "Image will be pushed to: $FULL_URI"
-
-      # ------------------------------------------------------------------------
-      # PREPARE BUILD ARGUMENTS
-      # ------------------------------------------------------------------------
-      - name: Prepare Build Arguments
-        id: build_args
-        run: |
-          # Use a temporary file to handle multi-line build args safely
-          cat > build_args.txt << 'EOF'
-          ${{ inputs.build_args }}
-          EOF
+          echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
           
-          # Output the combined build args
-          echo "combined_args<<EOF" >> $GITHUB_OUTPUT
-          cat build_args.txt >> $GITHUB_OUTPUT
-          echo "EOF" >> $GITHUB_OUTPUT
+          # 2. DETERMINE REGISTRY BASE URL AND CONSTRUCT FULL URI
+          if [[ "$REGISTRY_TYPE" == "nexus" ]]; then
+            REGISTRY="$NEXUS_URL"
+            
+            # Nexus has two modes:
+            # A. Dedicated port mode: nexus.example.com:8082 (no repository path)
+            # B. Subdirectory mode:   nexus.example.com/repository/docker-hosted
+            
+            # Detection: If nexus_docker_repo is empty or 'docker-hosted' AND URL has port, assume dedicated
+            if [[ "$NEXUS_DOCKER_REPO" == "docker-hosted" || -z "$NEXUS_DOCKER_REPO" ]] && [[ "$NEXUS_URL" =~ :[0-9]+$ ]]; then
+              # Dedicated port mode
+              FULL_URI="${REGISTRY}/${IMAGE_NAME}:${TAG}"
+            else
+              # Subdirectory mode
+              FULL_URI="${REGISTRY}/${NEXUS_DOCKER_REPO}/${IMAGE_NAME}:${TAG}"
+            fi
+          
+          elif [[ "$REGISTRY_TYPE" == "ecr" ]]; then
+            # AWS ECR
+            REGISTRY="$ECR_REGISTRY"
+            FULL_URI="${REGISTRY}/${IMAGE_NAME}:${TAG}"
+          
+          else
+            # Generic (Docker Hub, GHCR, etc.)
+            REGISTRY="$GENERIC_REGISTRY"
+            # Docker Hub special case: no registry prefix if it's docker.io
+            if [[ "$REGISTRY" == "docker.io" ]]; then
+              FULL_URI="${IMAGE_NAME}:${TAG}"
+            else
+              FULL_URI="${REGISTRY}/${IMAGE_NAME}:${TAG}"
+            fi
+          fi
+          
+          echo "image_uri=$FULL_URI" >> $GITHUB_OUTPUT
+          echo ""
+          echo "📦 Final Image URI: $FULL_URI"
 
-      # ------------------------------------------------------------------------
-      # SHARED: BUILD & PUSH
-      # ------------------------------------------------------------------------
-      - name: Build and Push
-        id: build-push
+      # ----------------------------------------------------------------------
+      # 5. BUILD & PUSH (with Provenance OFF for reproducibility)
+      # ----------------------------------------------------------------------
+      - name: Parse Build Args
+        id: parse-build-args
+        env:
+          BUILD_ARGS: ${{ inputs.build_args }}
+        run: |
+          if [[ -n "$BUILD_ARGS" ]]; then
+            # Convert multiline string to comma-separated for build-push-action
+            ARGS=$(echo "$BUILD_ARGS" | tr '\n' ',' | sed 's/,$//')
+            echo "args=$ARGS" >> $GITHUB_OUTPUT
+            echo "📋 Build Args: $ARGS"
+          else
+            echo "args=" >> $GITHUB_OUTPUT
+          fi
+
+      - name: Build and Push Docker Image
+        id: build
         uses: docker/build-push-action@v5.1.0
         with:
           context: ${{ inputs.working_directory }}
           file: ${{ inputs.working_directory }}/${{ inputs.dockerfile }}
-          push: true
-          tags: ${{ steps.meta.outputs.full_uri }}
           platforms: ${{ inputs.platforms }}
-          build-args: |
-            ${{ steps.build_args.outputs.combined_args }}
-            ARTIFACT_NAME=${{ steps.download.outputs.artifact_name }}
-          # Standard GHA Caching
+          push: true
+          tags: ${{ steps.meta.outputs.image_uri }}
+          build-args: ${{ steps.parse-build-args.outputs.args }}
+          provenance: false  # Disable provenance for reproducible builds
+          # Note: Set provenance: true, mode: max for SLSA Level 2+ compliance
           cache-from: type=gha
           cache-to: type=gha,mode=max
-          # DOCUMENTED: Provenance disabled for compatibility with older registries
-          provenance: false
 
-      # ------------------------------------------------------------------------
-      # OUTPUT
-      # ------------------------------------------------------------------------
-      - name: Set Output
-        id: set_output
+      # ----------------------------------------------------------------------
+      # 6. OUTPUT SUMMARY
+      # ----------------------------------------------------------------------
+      - name: Summary
         run: |
-          echo "image_uri=${{ steps.meta.outputs.full_uri }}" >> $GITHUB_OUTPUT
-          echo "image_digest=${{ steps.build-push.outputs.digest }}" >> $GITHUB_OUTPUT
-          echo "✅ Image pushed successfully!"
-          echo "URI: ${{ steps.meta.outputs.full_uri }}"
-          echo "Digest: ${{ steps.build-push.outputs.digest }}"
+          echo "# 🐳 Docker Build Complete" >> $GITHUB_STEP_SUMMARY
+          echo "" >> $GITHUB_STEP_SUMMARY
+          echo "| Attribute | Value |" >> $GITHUB_STEP_SUMMARY
+          echo "|-----------|-------|" >> $GITHUB_STEP_SUMMARY
+          echo "| **Image URI** | \`${{ steps.meta.outputs.image_uri }}\` |" >> $GITHUB_STEP_SUMMARY
+          echo "| **Digest** | \`${{ steps.build.outputs.digest }}\` |" >> $GITHUB_STEP_SUMMARY
+          echo "| **Tag** | \`${{ steps.meta.outputs.tag }}\` |" >> $GITHUB_STEP_SUMMARY
+          echo "| **Registry** | ${{ inputs.registry_type }} |" >> $GITHUB_STEP_SUMMARY
+          echo "| **Platforms** | ${{ inputs.platforms }} |" >> $GITHUB_STEP_SUMMARY
+          echo "" >> $GITHUB_STEP_SUMMARY
+          echo "✅ Image pushed successfully to registry" >> $GITHUB_STEP_SUMMARY
