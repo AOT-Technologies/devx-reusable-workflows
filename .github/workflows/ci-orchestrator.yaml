@@ -298,6 +298,7 @@ jobs:
       registry_type: ${{ fromJson(needs.load-config.outputs.config).docker.registry_type || 'ecr' }}
       image_name: ${{ fromJson(needs.load-config.outputs.config).docker.image_name }}
       image_tag: ${{ fromJson(needs.load-config.outputs.config).docker.image_tag || '' }}
+      artifact_name: ${{ needs.load-config.outputs.artifact_name }}
       # AWS Context for ECR
       aws_region: ${{ fromJson(needs.load-config.outputs.config).aws.region || 'us-east-1' }}
       role_to_assume: ${{ fromJson(needs.load-config.outputs.config).aws.role_to_assume || '' }}

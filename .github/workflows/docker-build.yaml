@@ -80,6 +80,10 @@ on:
         description: "Path to the artifact in Nexus (e.g., com/org/app/1.0.0/app.jar)"
         type: string
         default: ""
+      artifact_name:
+        description: "Unique identifier for the artifact (Used for GitHub Actions fallback download)"
+        type: string
+        default: ""
 
       # --- BUILD OPTIONS ---
       build_args:
@@ -272,6 +276,28 @@ jobs:
             exit 1
           fi
 
+      - name: Download Artifact from GitHub (Fallback)
+        if: inputs.nexus_artifact_path == '' && inputs.artifact_name != ''
+        id: download_gh
+        uses: actions/download-artifact@v4.1.7
+        with:
+          name: ${{ inputs.artifact_name }}
+          path: .
+      
+      - name: Setup Artifact Name Output
+        id: artifact_info
+        run: |
+          if [[ -n "${{ steps.download.outputs.artifact_name }}" ]]; then
+            echo "name=${{ steps.download.outputs.artifact_name }}" >> $GITHUB_OUTPUT
+          elif [[ -n "${{ inputs.artifact_name }}" ]]; then
+            # When downloading from GitHub, we need to find what was inside the artifact
+            # Since the build scripts upload a single file, we can look for it
+            FILENAME=$(ls *.whl *.tgz *.jar 2>/dev/null | head -n 1)
+            echo "name=$FILENAME" >> $GITHUB_OUTPUT
+          else
+            echo "name=" >> $GITHUB_OUTPUT
+          fi
+
       # ----------------------------------------------------------------------
       # 4. SMART VERSIONING METADATA
       # Detects branch type and generates appropriate image tags
@@ -376,7 +402,7 @@ jobs:
         id: parse-build-args
         env:
           BUILD_ARGS: ${{ inputs.build_args }}
-          DOWNLOADED_ARTIFACT: ${{ steps.download.outputs.artifact_name }}
+          DOWNLOADED_ARTIFACT: ${{ steps.artifact_info.outputs.name }}
         run: |
           # Start with the input build args
           COMBINED_ARGS="$BUILD_ARGS"

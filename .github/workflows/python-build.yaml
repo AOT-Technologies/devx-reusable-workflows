@@ -238,6 +238,15 @@ jobs:
           echo "fullpath=$ARTIFACT_FILE" >> $GITHUB_OUTPUT
           echo "📦 Detected artifact: $FILENAME"
 
+      # --- STAGING ARTIFACT (For Docker Build) ---
+      - name: Upload Artifact to GitHub (Staging)
+        if: inputs.artifact_path != ''
+        uses: actions/upload-artifact@v4.3.1
+        with:
+          name: ${{ inputs.artifact_name || format('python-artifact-{0}', github.run_id) }}
+          path: ${{ steps.detect_artifact.outputs.fullpath }}
+          retention-days: 1
+
       # --- UPLOAD TO NEXUS ---
       - name: Upload to Nexus
         if: inputs.artifact_path != '' && inputs.nexus_url != '' && inputs.skip_upload != true
