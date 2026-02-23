@@ -58,6 +58,10 @@ on:
         description: "Custom upload path in Nexus (e.g., package/1.0.0/package.whl)"
         type: string
         default: ""
+      skip_upload:
+        description: "Skip uploading the artifact to Nexus (for CI-only verification)"
+        type: boolean
+        default: false
 
     secrets:
       NEXUS_USERNAME:
@@ -236,7 +240,7 @@ jobs:
 
       # --- UPLOAD TO NEXUS ---
       - name: Upload to Nexus
-        if: inputs.artifact_path != '' && inputs.nexus_url != ''
+        if: inputs.artifact_path != '' && inputs.nexus_url != '' && inputs.skip_upload != true
         id: upload_nexus
         env:
           NEXUS_USER: ${{ secrets.NEXUS_USERNAME }}

@@ -21,6 +21,10 @@ on:
         description: "Automatically merge PR if all checks pass"
         type: boolean
         default: false
+      push:
+        description: "Push images and artifacts to registries?"
+        type: boolean
+        default: true
     secrets:
       # Pass through for Docker Hub / Generic Registries
       registry_username:
@@ -215,6 +219,7 @@ jobs:
       nexus_repository: ${{ fromJson(needs.load-config.outputs.config).nexus.repository || 'raw-releases' }}
       nexus_repo_type: ${{ fromJson(needs.load-config.outputs.config).nexus.repo_type || 'raw' }}
       nexus_path: ${{ fromJson(needs.load-config.outputs.config).nexus.upload_path || '' }}
+      skip_upload: ${{ inputs.push != true }}
 
   build-python:
     needs: [load-config, sast-semgrep, sast-sonarqube, iac]
@@ -242,6 +247,7 @@ jobs:
       nexus_repository: ${{ fromJson(needs.load-config.outputs.config).nexus.repository || 'raw-releases' }}
       nexus_repo_type: ${{ fromJson(needs.load-config.outputs.config).nexus.repo_type || 'raw' }}
       nexus_path: ${{ fromJson(needs.load-config.outputs.config).nexus.upload_path || '' }}
+      skip_upload: ${{ inputs.push != true }}
 
   build-maven:
     needs: [load-config, sast-semgrep, sast-sonarqube, iac]
@@ -267,6 +273,7 @@ jobs:
       # Nexus configuration
       nexus_url: ${{ fromJson(needs.load-config.outputs.config).nexus.url || '' }}
       nexus_repository: ${{ fromJson(needs.load-config.outputs.config).nexus.repository || 'maven-releases' }}
+      skip_upload: ${{ inputs.push != true }}
 
   # ---------------------------------------------------------------------------
   # 5. DOCKER BUILD (Conditional)
@@ -306,6 +313,7 @@ jobs:
       # Build configuration
       build_args: ${{ fromJson(needs.load-config.outputs.config).docker.build_args || '' }}
       platforms: ${{ fromJson(needs.load-config.outputs.config).docker.platforms || 'linux/amd64' }}
+      push: ${{ inputs.push }}
 
   # ---------------------------------------------------------------------------
   # 6. POST-BUILD SECURITY (SEQUENTIAL CHAIN)
