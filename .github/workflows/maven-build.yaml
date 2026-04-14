@@ -183,35 +183,33 @@ jobs:
       - name: Detect Artifact File
         id: detect_artifact
         run: |
-          # Find the actual JAR file (exclude .original files from Spring Boot repackaging)
+          # Enable recursive globbing (**)
+          shopt -s globstar
           shopt -s nullglob
+          
+          echo "🔍 Searching for artifacts with pattern: ${{ inputs.artifact_path }}"
           JAR_FILES=(${{ inputs.artifact_path }})
           
           # Filter out .original files
           ACTUAL_JAR=""
           for f in "${JAR_FILES[@]}"; do
-            if [[ "$f" != *.original ]]; then
+            if [[ "$f" != *.original && -f "$f" ]]; then
               ACTUAL_JAR="$f"
               break
             fi
           done
           
-          if [[ -z "$ACTUAL_JAR" || ! -f "$ACTUAL_JAR" ]]; then
-            echo "::error::No JAR file found at path: ${{ inputs.artifact_path }}"
-            ARTIFACT_DIR=$(dirname "${{ inputs.artifact_path }}")
-            if [[ -d "$ARTIFACT_DIR" ]]; then
-              ls -la "$ARTIFACT_DIR/"
-            else
-              echo "Directory $ARTIFACT_DIR does not exist."
-              ls -R .
-            fi
+          if [[ -z "$ACTUAL_JAR" ]]; then
+            echo "::error::No JAR file found matching pattern: ${{ inputs.artifact_path }}"
+            echo "📂 Directory listing (recursive):"
+            find . -maxdepth 3 -not -path '*/.*'
             exit 1
           fi
           
           FILENAME=$(basename "$ACTUAL_JAR")
           echo "fullpath=$ACTUAL_JAR" >> $GITHUB_OUTPUT
           echo "filename=$FILENAME" >> $GITHUB_OUTPUT
-          echo "📦 Detected artifact: $FILENAME"
+          echo "✅ Detected artifact: $ACTUAL_JAR"
 
       # --- STAGING ARTIFACT ---
       - name: Upload Artifact to GitHub (Staging)
