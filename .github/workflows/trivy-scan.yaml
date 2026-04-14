@@ -1,4 +1,4 @@
-﻿name: "Module: Trivy Security Scan"
+name: "Module: Trivy Security Scan"
 # ------------------------------------------------------------------------------
 # Universal Policy Enforcement Point (Filesystem & Image).
 # ------------------------------------------------------------------------------
@@ -205,7 +205,7 @@ jobs:
       # ------------------------------------------------------------------------
       - name: Run Trivy (FS)
         if: inputs.scan_type == 'fs'
-        uses: aquasecurity/trivy-action@v0.28.0
+        uses: aquasecurity/trivy-action@v0.24.0
         with:
           scan-type: 'fs'
           scan-ref: ${{ inputs.scan_path }}
@@ -221,7 +221,7 @@ jobs:
       # ------------------------------------------------------------------------
       - name: Run Trivy (Image)
         if: inputs.scan_type == 'image'
-        uses: aquasecurity/trivy-action@v0.28.0
+        uses: aquasecurity/trivy-action@v0.24.0
         with:
           scan-type: 'image'
           image-ref: ${{ inputs.image_uri }}
