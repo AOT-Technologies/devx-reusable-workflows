@@ -216,7 +216,7 @@ jobs:
         uses: actions/upload-artifact@v4.3.1
         with:
           name: ${{ inputs.artifact_name || format('maven-artifact-{0}', github.run_id) }}
-          path: ${{ steps.detect_artifact.outputs.fullpath }}
+          path: ${{ inputs.working_directory }}/${{ steps.detect_artifact.outputs.fullpath }}
           retention-days: 1
 
       # --- UPLOAD TO NEXUS ---

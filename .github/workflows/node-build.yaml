@@ -208,6 +208,9 @@ jobs:
         if: inputs.artifact_path != ''
         id: detect_artifact
         run: |
+          # Enable recursive globbing (**)
+          shopt -s globstar
+          shopt -s nullglob
           # Find the actual file from artifact_path pattern
           ARTIFACT_FILES=(${{ inputs.artifact_path }})
           
@@ -230,7 +233,7 @@ jobs:
         uses: actions/upload-artifact@v4.3.1
         with:
           name: ${{ inputs.artifact_name || format('node-artifact-{0}', github.run_id) }}
-          path: ${{ steps.detect_artifact.outputs.fullpath }}
+          path: ${{ inputs.working_directory }}/${{ steps.detect_artifact.outputs.fullpath }}
           retention-days: 1
 
       # --- UPLOAD TO NEXUS ---
