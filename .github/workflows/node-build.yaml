@@ -276,7 +276,7 @@ jobs:
             # Publish
             npm publish
             
-            # Construct the download path for docker-build.yaml
+            # Construct the download path for docker-build.yaml@v1
             PKG_NAME=$(node -p "require('./package.json').name")
             PKG_VERSION=$(node -p "require('./package.json').version")
             # Robust way to get the filename npm pack will produce:

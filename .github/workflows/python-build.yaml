@@ -281,7 +281,7 @@ jobs:
             TWINE_REPOSITORY_URL="$PYPI_URL" \
             twine upload "$ARTIFACT_FILE"
             
-            # Construct the download path for docker-build.yaml
+            # Construct the download path for docker-build.yaml@v1
             # For Nexus PyPI, the path is usually: packages/[package-name]/[version]/[filename]
             # We can extract package name and version from the filename or setup.py
             # For now, we'll try to extract it from the wheel filename
