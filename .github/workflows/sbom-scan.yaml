@@ -117,6 +117,7 @@ jobs:
         uses: actions/download-artifact@v4
         with:
           name: ${{ inputs.sbom_artifact_name }}
+          path: .
 
       # ------------------------------------------------------------------------
       # VALIDATION & DISCOVERY
@@ -128,13 +129,15 @@ jobs:
           
           # 2. If no path, but artifact was downloaded, look for SBOM files specifically
           if [[ -z "$SBOM_FILE" && -n "${{ inputs.sbom_artifact_name }}" ]]; then
+            echo "🔍 Searching for SBOM file in current directory..."
+            ls -R .
             # First try: Look for files matching sbom-*.json pattern
-            SBOM_FILE=$(find . -name "sbom-*.json" -type f -print -quit)
+            SBOM_FILE=$(find . -maxdepth 2 -name "sbom-*.json" -type f -print -quit)
             
             # Second try: Look for files containing SBOM markers (CycloneDX or SPDX)
             if [[ -z "$SBOM_FILE" ]]; then
               echo "Looking for SBOM format markers..."
-              for json_file in $(find . -name "*.json" -type f); do
+              for json_file in $(find . -maxdepth 2 -name "*.json" -type f); do
                 if grep -q -E '"bomFormat"|"spdxVersion"' "$json_file" 2>/dev/null; then
                   SBOM_FILE="$json_file"
                   echo "Found SBOM format in: $json_file"
@@ -147,15 +150,8 @@ jobs:
           # 3. Final Validation
           if [[ ! -f "$SBOM_FILE" ]]; then
             echo "::error::SBOM file not found."
-            echo "::error::Ensure 'sbom_path' is set or 'sbom_artifact_name' was downloaded correctly."
-            echo "::error::Searched for: sbom-*.json or files containing bomFormat/spdxVersion"
+            ls -R .
             exit 1
-          fi
-          
-          # 4. Validate SBOM format
-          echo "Validating SBOM format..."
-          if ! grep -q -E '"bomFormat"|"spdxVersion"' "$SBOM_FILE"; then
-            echo "::warning::File found but doesn't appear to be a valid SBOM (missing bomFormat or spdxVersion)"
           fi
           
           echo "Using SBOM file: $SBOM_FILE"
@@ -167,19 +163,19 @@ jobs:
       - name: Install Grype
         run: |
           VERSION="v0.74.7"
-          echo "Installing Grype ${VERSION}..."
-          curl -sSfL https://raw.githubusercontent.com/anchore/grype/${VERSION}/install.sh | sh -s -- -b /usr/local/bin ${VERSION}
+          curl -sSfL https://raw.githubusercontent.com/anchore/grype/main/install.sh | sh -s -- -b /usr/local/bin ${VERSION}
           grype version
 
       - name: Run Grype Analysis
         timeout-minutes: 10
         run: |
-          echo "Scanning SBOM: ${{ env.SBOM_FILE }}"
+          echo "🔍 Scanning SBOM: ${{ env.SBOM_FILE }}"
+          # We remove || true to let the pipeline fail so we can see the error
+          # but we add --fail-on if the user wants it.
           grype sbom:${{ env.SBOM_FILE }} \
             --fail-on ${{ inputs.severity_threshold }} \
             --output ${{ inputs.output_format }} \
-            --file grype-results.${{ inputs.output_format }} \
-            || true # Ensure we don't crash the step, job-level continue-on-error handles the rest
+            --file grype-results.${{ inputs.output_format }}
 
       # ------------------------------------------------------------------------
       # REPORTING
