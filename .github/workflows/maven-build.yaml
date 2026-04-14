@@ -185,7 +185,7 @@ jobs:
         run: |
           # Find the actual JAR file (exclude .original files from Spring Boot repackaging)
           shopt -s nullglob
-          JAR_FILES=(target/*.jar)
+          JAR_FILES=(${{ inputs.artifact_path }})
           
           # Filter out .original files
           ACTUAL_JAR=""
@@ -197,8 +197,14 @@ jobs:
           done
           
           if [[ -z "$ACTUAL_JAR" || ! -f "$ACTUAL_JAR" ]]; then
-            echo "::error::No JAR file found in target directory"
-            ls -la target/
+            echo "::error::No JAR file found at path: ${{ inputs.artifact_path }}"
+            ARTIFACT_DIR=$(dirname "${{ inputs.artifact_path }}")
+            if [[ -d "$ARTIFACT_DIR" ]]; then
+              ls -la "$ARTIFACT_DIR/"
+            else
+              echo "Directory $ARTIFACT_DIR does not exist."
+              ls -R .
+            fi
             exit 1
           fi
           
