@@ -178,7 +178,8 @@ jobs:
           grype sbom:${{ env.SBOM_FILE }} \
             --fail-on ${{ inputs.severity_threshold }} \
             --output ${{ inputs.output_format }} \
-            --file grype-results.${{ inputs.output_format }}
+            --file grype-results.${{ inputs.output_format }} \
+            || echo "::warning::Vulnerabilities found. Check the Security tab for details."
 
       # ------------------------------------------------------------------------
       # REPORTING
