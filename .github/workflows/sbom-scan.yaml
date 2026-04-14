@@ -169,9 +169,10 @@ jobs:
       - name: Run Grype Analysis
         timeout-minutes: 10
         run: |
+          echo "🔍 Updating Grype Database..."
+          grype db update || echo "::warning::Grype DB update failed. Attempting to scan with existing DB."
+          
           echo "🔍 Scanning SBOM: ${{ env.SBOM_FILE }}"
-          # We remove || true to let the pipeline fail so we can see the error
-          # but we add --fail-on if the user wants it.
           grype sbom:${{ env.SBOM_FILE }} \
             --fail-on ${{ inputs.severity_threshold }} \
             --output ${{ inputs.output_format }} \
