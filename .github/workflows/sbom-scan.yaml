@@ -162,19 +162,20 @@ jobs:
       # ------------------------------------------------------------------------
       - name: Install Grype
         run: |
-          VERSION="v0.74.7"
+          VERSION="v0.77.0"
           curl -sSfL https://raw.githubusercontent.com/anchore/grype/main/install.sh | sh -s -- -b /usr/local/bin ${VERSION}
           grype version
 
       - name: Run Grype Analysis
         timeout-minutes: 10
+        env:
+          GRYPE_DB_VALIDATE_AGE: "false"
         run: |
           echo "🔍 Updating Grype Database..."
-          grype db update || echo "::warning::Grype DB update failed. Attempting to scan with existing DB."
+          grype db update || echo "::warning::Grype DB update failed. Using existing DB."
           
           echo "🔍 Scanning SBOM: ${{ env.SBOM_FILE }}"
           grype sbom:${{ env.SBOM_FILE }} \
-            --ignore-db-status \
             --fail-on ${{ inputs.severity_threshold }} \
             --output ${{ inputs.output_format }} \
             --file grype-results.${{ inputs.output_format }}
