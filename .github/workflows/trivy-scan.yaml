@@ -1,4 +1,4 @@
-name: "Module: Trivy Security Scan"
+﻿name: "Module: Trivy Security Scan"
 # ------------------------------------------------------------------------------
 # Universal Policy Enforcement Point (Filesystem & Image).
 # ------------------------------------------------------------------------------
@@ -196,9 +196,9 @@ jobs:
       - name: Pull Image for Scanning
         if: inputs.scan_type == 'image'
         run: |
-          echo "🔍 Pulling image for local scan: ${{ inputs.image_uri }}"
+          echo "ðŸ” Pulling image for local scan: ${{ inputs.image_uri }}"
           docker pull ${{ inputs.image_uri }}
-          echo "✅ Image pulled successfully"
+          echo "âœ… Image pulled successfully"
 
       # ------------------------------------------------------------------------
       # MODE 1: FILESYSTEM SCAN (Dependencies & IaC)
@@ -221,7 +221,7 @@ jobs:
       # ------------------------------------------------------------------------
       - name: Run Trivy (Image)
         if: inputs.scan_type == 'image'
-        uses: aquasecurity/trivy-action@0.28.0
+        uses: aquasecurity/trivy-action@v0.28.0
         with:
           scan-type: 'image'
           image-ref: ${{ inputs.image_uri }}
@@ -248,7 +248,7 @@ jobs:
       - name: Generate Scan Summary
         if: always()
         run: |
-          echo "## 🔍 Trivy Security Scan Results" >> $GITHUB_STEP_SUMMARY
+          echo "## ðŸ” Trivy Security Scan Results" >> $GITHUB_STEP_SUMMARY
           echo "" >> $GITHUB_STEP_SUMMARY
           echo "- **Scan Type:** ${{ inputs.scan_type }}" >> $GITHUB_STEP_SUMMARY
           if [[ "${{ inputs.scan_type }}" == "image" ]]; then
@@ -261,7 +261,7 @@ jobs:
           echo "" >> $GITHUB_STEP_SUMMARY
           
           if [[ -f "trivy-${{ inputs.scan_type }}-results.sarif" ]]; then
-            echo "✅ Scan completed. Results uploaded to Security tab." >> $GITHUB_STEP_SUMMARY
+            echo "âœ… Scan completed. Results uploaded to Security tab." >> $GITHUB_STEP_SUMMARY
           else
-            echo "⚠️  Scan completed but no SARIF file generated." >> $GITHUB_STEP_SUMMARY
+            echo "âš ï¸  Scan completed but no SARIF file generated." >> $GITHUB_STEP_SUMMARY
           fi
