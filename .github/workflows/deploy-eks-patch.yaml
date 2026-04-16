@@ -166,6 +166,15 @@ jobs:
 
           if [[ -n "$INGRESS_HOST" ]]; then
             echo "url=https://$INGRESS_HOST" >> $GITHUB_OUTPUT
+            exit 0
+          fi
+
+          # If no ingress host, try to get hostname from Service of type LoadBalancer
+          SVC_URL=$(kubectl get svc -n "${{ inputs.namespace }}" \
+            -o jsonpath='{.items[?(@.spec.type=="LoadBalancer")].status.loadBalancer.ingress[0].hostname}' 2>/dev/null || echo "")
+          
+          if [[ -n "$SVC_URL" ]]; then
+            echo "url=http://$SVC_URL" >> $GITHUB_OUTPUT
           else
             echo "url=N/A" >> $GITHUB_OUTPUT
           fi
