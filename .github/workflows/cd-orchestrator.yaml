@@ -545,7 +545,7 @@ jobs:
   # 5. ROLLBACK (On Health Check Failure)
   # ---------------------------------------------------------------------------
   rollback:
-    needs: [validate-and-load, deploy-eks, deploy-ec2, deploy-ecs, health-check]
+    needs: [validate-and-load, deploy-eks, deploy-eks-patch, deploy-ec2, deploy-ecs, health-check]
     if: |
       always() &&
       needs.health-check.result == 'failure' &&
@@ -596,13 +596,13 @@ jobs:
   # 6. NOTIFY: FINAL RESULT
   # ---------------------------------------------------------------------------
   notify-result:
-    needs: [validate-and-load, deploy-eks, deploy-ec2, deploy-ecs, health-check, rollback, rollback-ec2-execution]
+    needs: [validate-and-load, deploy-eks, deploy-eks-patch, deploy-ec2, deploy-ecs, health-check, rollback, rollback-ec2-execution]
     if: always() && needs.validate-and-load.outputs.notifications_enabled == 'true'
     uses: AOT-Technologies/devx-reusable-workflows/.github/workflows/notify-google-chat.yaml@v1
     secrets:
       GOOGLE_CHAT_WEBHOOK: ${{ secrets.GOOGLE_CHAT_WEBHOOK }}
     with:
-      status: ${{ (needs.health-check.result == 'success' || (needs.health-check.result == 'skipped' && (needs.deploy-eks.result == 'success' || needs.deploy-ec2.result == 'success' || needs.deploy-ecs.result == 'success'))) && 'success' || (needs.rollback.result == 'success' && 'rollback' || 'failure') }}
+      status: ${{ (needs.health-check.result == 'success' || (needs.health-check.result == 'skipped' && (needs.deploy-eks.result == 'success' || needs.deploy-eks-patch.result == 'success' || needs.deploy-ec2.result == 'success' || needs.deploy-ecs.result == 'success'))) && 'success' || (needs.rollback.result == 'success' && 'rollback' || 'failure') }}
       environment: ${{ inputs.environment }}
       image_uri: ${{ inputs.image_uri }}
 
@@ -611,7 +611,7 @@ jobs:
   # ---------------------------------------------------------------------------
   summary:
     if: always()
-    needs: [validate-and-load, deploy-eks, deploy-ec2, deploy-ecs, health-check, rollback, rollback-ec2-execution, notify-result]
+    needs: [validate-and-load, deploy-eks, deploy-eks-patch, deploy-ec2, deploy-ecs, health-check, rollback, rollback-ec2-execution, notify-result]
     runs-on: ubuntu-latest
     timeout-minutes: 2
     
@@ -631,7 +631,7 @@ jobs:
           echo "| **Target** | ${{ needs.validate-and-load.outputs.deployment_target }} |" >> $GITHUB_STEP_SUMMARY
           echo "| **Image** | \`${{ inputs.image_uri }}\` |" >> $GITHUB_STEP_SUMMARY
           echo "| **Dry Run** | ${{ inputs.dry_run }} |" >> $GITHUB_STEP_SUMMARY
-          echo "| **App URL** | [${{ needs.deploy-eks.outputs.url }}](${{ needs.deploy-eks.outputs.url }}) |" >> $GITHUB_STEP_SUMMARY
+          echo "| **App URL** | [${{ needs.deploy-eks.outputs.url || needs.deploy-eks-patch.outputs.url || 'N/A' }}](${{ needs.deploy-eks.outputs.url || needs.deploy-eks-patch.outputs.url || '' }}) |" >> $GITHUB_STEP_SUMMARY
           echo "" >> $GITHUB_STEP_SUMMARY
           
           echo "### Stage Results" >> $GITHUB_STEP_SUMMARY
@@ -649,7 +649,7 @@ jobs:
       - name: Determine Final Status
         id: status
         run: |
-          if [[ "${{ needs.health-check.result }}" == "success" ]] || [[ "${{ needs.health-check.result }}" == "skipped" && ("${{ needs.deploy-eks.result }}" == "success" || "${{ needs.deploy-ec2.result }}" == "success" || "${{ needs.deploy-ecs.result }}" == "success") ]]; then
+          if [[ "${{ needs.health-check.result }}" == "success" ]] || [[ "${{ needs.health-check.result }}" == "skipped" && ("${{ needs.deploy-eks.result }}" == "success" || "${{ needs.deploy-eks-patch.result }}" == "success" || "${{ needs.deploy-ec2.result }}" == "success" || "${{ needs.deploy-ecs.result }}" == "success") ]]; then
             echo "final_status=success" >> $GITHUB_OUTPUT
             echo "### Deployment Status: **SUCCESS**" >> $GITHUB_STEP_SUMMARY
           elif [[ "${{ needs.rollback.result }}" == "success" ]]; then

@@ -64,6 +64,9 @@ on:
       status:
         description: "Deployment status"
         value: ${{ jobs.deploy.outputs.status }}
+      url:
+        description: "Deployment URL"
+        value: ${{ jobs.deploy.outputs.url }}
 
 permissions:
   contents: read
@@ -77,6 +80,7 @@ jobs:
     
     outputs:
       status: ${{ steps.result.outputs.status }}
+      url: ${{ steps.deploy_url.outputs.url }}
 
     steps:
       - name: Checkout Code
@@ -139,4 +143,29 @@ jobs:
             echo "status=success" >> $GITHUB_OUTPUT
           else
             echo "status=failed" >> $GITHUB_OUTPUT
+          fi
+
+      - name: Generate Deployment URL
+        id: deploy_url
+        if: always() && steps.patch.outcome == 'success'
+        run: |
+          # Try to get host from ingress rules first
+          INGRESS_HOST=$(kubectl get ingress -n "${{ inputs.namespace }}" \
+            -o jsonpath='{.items[0].spec.rules[0].host}' 2>/dev/null || echo "")
+          
+          # If no host, try to get ALB DNS name from status
+          if [[ -z "$INGRESS_HOST" ]]; then
+             INGRESS_ALB=$(kubectl get ingress -n "${{ inputs.namespace }}" \
+              -o jsonpath='{.items[0].status.loadBalancer.ingress[0].hostname}' 2>/dev/null || echo "")
+             
+             if [[ -n "$INGRESS_ALB" ]]; then
+               echo "url=http://$INGRESS_ALB" >> $GITHUB_OUTPUT
+               exit 0
+             fi
+          fi
+
+          if [[ -n "$INGRESS_HOST" ]]; then
+            echo "url=https://$INGRESS_HOST" >> $GITHUB_OUTPUT
+          else
+            echo "url=N/A" >> $GITHUB_OUTPUT
           fi
