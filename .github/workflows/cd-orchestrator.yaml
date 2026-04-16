@@ -403,7 +403,8 @@ jobs:
     if: |
       always() &&
       needs.validate-and-load.result == 'success' &&
-      needs.validate-and-load.outputs.deployment_target == 'eks'
+      needs.validate-and-load.outputs.deployment_target == 'eks' &&
+      needs.validate-and-load.outputs.deployment_method == 'helm'
     uses: AOT-Technologies/devx-reusable-workflows/.github/workflows/deploy-eks.yaml@v1
     with:
       environment: ${{ inputs.environment }}
