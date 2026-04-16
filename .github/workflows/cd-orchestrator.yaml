@@ -117,6 +117,9 @@ jobs:
       namespace: ${{ steps.extract.outputs.namespace }}
       aws_region: ${{ steps.extract.outputs.aws_region }}
       role_to_assume: ${{ steps.extract.outputs.role_to_assume }}
+      deployment_method: ${{ steps.extract.outputs.deployment_method }}
+      deployment_name: ${{ steps.extract.outputs.deployment_name }}
+      container_name: ${{ steps.extract.outputs.container_name }}
       # EKS-specific
       helm_chart_path: ${{ steps.extract.outputs.helm_chart_path }}
       helm_release_name: ${{ steps.extract.outputs.helm_release_name }}
@@ -279,6 +282,10 @@ jobs:
                 ATOMIC=$(yq ".deployment.helm.atomic // \"true\"" $CONFIG_FILE)
               fi
               
+              DEPLOY_METHOD=$(yq ".deployment.environments.$ENV.method // .deployment.method // \"helm\"" $CONFIG_FILE)
+              DEPLOY_NAME=$(yq ".deployment.environments.$ENV.deployment_name // \"\"" $CONFIG_FILE)
+              CONT_NAME=$(yq ".deployment.environments.$ENV.container_name // \"\"" $CONFIG_FILE)
+              
               echo "cluster_name=$CLUSTER" >> $GITHUB_OUTPUT
               echo "namespace=$NAMESPACE" >> $GITHUB_OUTPUT
               echo "helm_chart_path=$CHART" >> $GITHUB_OUTPUT
@@ -286,6 +293,9 @@ jobs:
               echo "helm_values_file=$VALUES" >> $GITHUB_OUTPUT
               echo "helm_set_values=$SET_VALUES" >> $GITHUB_OUTPUT
               echo "atomic=$ATOMIC" >> $GITHUB_OUTPUT
+              echo "deployment_method=$DEPLOY_METHOD" >> $GITHUB_OUTPUT
+              echo "deployment_name=$DEPLOY_NAME" >> $GITHUB_OUTPUT
+              echo "container_name=$CONT_NAME" >> $GITHUB_OUTPUT
               ;;
             
             k8s)
@@ -413,6 +423,26 @@ jobs:
       image_pull_secret: ${{ needs.validate-and-load.outputs.image_pull_secret }}
       ingress_domain: ${{ needs.validate-and-load.outputs.ingress_domain }}
 
+  # EKS PATCH DEPLOYMENT (via reusable module)
+  deploy-eks-patch:
+    needs: [validate-and-load, notify-start]
+    if: |
+      always() &&
+      needs.validate-and-load.result == 'success' &&
+      needs.validate-and-load.outputs.deployment_target == 'eks' &&
+      needs.validate-and-load.outputs.deployment_method == 'patch'
+    uses: AOT-Technologies/devx-reusable-workflows/.github/workflows/deploy-eks-patch.yaml@v1
+    with:
+      environment: ${{ inputs.environment }}
+      image_uri: ${{ inputs.image_uri }}
+      cluster_name: ${{ needs.validate-and-load.outputs.cluster_name }}
+      namespace: ${{ needs.validate-and-load.outputs.namespace }}
+      deployment_name: ${{ needs.validate-and-load.outputs.deployment_name }}
+      container_name: ${{ needs.validate-and-load.outputs.container_name }}
+      aws_region: ${{ needs.validate-and-load.outputs.aws_region }}
+      role_to_assume: ${{ needs.validate-and-load.outputs.role_to_assume }}
+      dry_run: ${{ inputs.dry_run }}
+
   # EC2 DEPLOYMENT (via reusable module - SSM or SSH)
   deploy-ec2:
     needs: [validate-and-load, notify-start]
@@ -486,7 +516,7 @@ jobs:
     needs: [validate-and-load, deploy-eks, deploy-ec2, deploy-ecs, deploy-k8s]
     if: |
       always() &&
-      (needs.deploy-eks.result == 'success' || needs.deploy-ec2.result == 'success' || needs.deploy-ecs.result == 'success' || needs.deploy-k8s.result == 'success') &&
+      (needs.deploy-eks.result == 'success' || needs.deploy-eks-patch.result == 'success' || needs.deploy-ec2.result == 'success' || needs.deploy-ecs.result == 'success' || needs.deploy-k8s.result == 'success') &&
       needs.validate-and-load.outputs.health_check_enabled == 'true' &&
       inputs.skip_health_check != true &&
       inputs.dry_run != true
@@ -497,7 +527,7 @@ jobs:
       health_url: >-
         ${{ needs.validate-and-load.outputs.health_check_url != '' 
           && needs.validate-and-load.outputs.health_check_url 
-          || (needs.deploy-eks.outputs.url || needs.deploy-ec2.outputs.url || needs.deploy-ecs.outputs.url || needs.deploy-k8s.outputs.url || '') 
+          || (needs.deploy-eks.outputs.url || needs.deploy-eks-patch.outputs.url || needs.deploy-ec2.outputs.url || needs.deploy-ecs.outputs.url || needs.deploy-k8s.outputs.url || '') 
         }}
       check_type: ${{ needs.validate-and-load.outputs.health_check_type }}
       namespace: ${{ needs.validate-and-load.outputs.namespace }}

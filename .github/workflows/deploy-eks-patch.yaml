@@ -1,0 +1,142 @@
+name: "Module: Deploy to EKS (Raw Patch)"
+
+# ------------------------------------------------------------------------------
+# Kubernetes deployment via raw image patching (kubectl set image).
+# PURPOSE:
+# - Support legacy components not yet on Helm.
+# - Fast, direct updates of existing deployments.
+# ------------------------------------------------------------------------------
+
+on:
+  workflow_call:
+    inputs:
+      # --- REQUIRED ---
+      environment:
+        description: "Target environment"
+        type: string
+        required: true
+      image_uri:
+        description: "Docker image URI to deploy"
+        type: string
+        required: true
+      cluster_name:
+        description: "EKS cluster name"
+        type: string
+        required: true
+      
+      # --- TARGET RESOURCES ---
+      deployment_name:
+        description: "Name of the Kubernetes deployment"
+        type: string
+        required: true
+      container_name:
+        description: "Name of the container within the deployment"
+        type: string
+        required: true
+      
+      # --- NAMESPACE ---
+      namespace:
+        description: "Kubernetes namespace"
+        type: string
+        default: "default"
+      
+      # --- AWS ---
+      aws_region:
+        description: "AWS region"
+        type: string
+        default: "ca-central-1"
+      role_to_assume:
+        description: "AWS IAM role for OIDC"
+        type: string
+        required: true
+      
+      # --- OPTIONS ---
+      dry_run:
+        description: "Dry run mode"
+        type: boolean
+        default: false
+      timeout:
+        description: "Rollout timeout (e.g., 5m)"
+        type: string
+        default: "5m"
+
+    outputs:
+      status:
+        description: "Deployment status"
+        value: ${{ jobs.deploy.outputs.status }}
+
+permissions:
+  contents: read
+  id-token: write
+  deployments: write
+
+jobs:
+  deploy:
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    
+    outputs:
+      status: ${{ steps.result.outputs.status }}
+
+    steps:
+      - name: Checkout Code
+        uses: actions/checkout@v4.1.1
+
+      - name: Configure AWS Credentials
+        uses: aws-actions/configure-aws-credentials@v4.0.2
+        with:
+          role-to-assume: ${{ inputs.role_to_assume }}
+          aws-region: ${{ inputs.aws_region }}
+
+      - name: Setup kubectl
+        run: |
+          aws eks update-kubeconfig \
+            --name "${{ inputs.cluster_name }}" \
+            --region ${{ inputs.aws_region }}
+          
+          kubectl cluster-info || {
+            echo "::error::Failed to connect to EKS cluster"
+            exit 1
+          }
+
+      - name: Patch Deployment Image
+        id: patch
+        run: |
+          NAMESPACE="${{ inputs.namespace }}"
+          DEPLOYMENT="${{ inputs.deployment_name }}"
+          CONTAINER="${{ inputs.container_name }}"
+          IMAGE="${{ inputs.image_uri }}"
+          
+          echo "🚀 Patching deployment '$DEPLOYMENT' in namespace '$NAMESPACE'..."
+          echo "Container: $CONTAINER"
+          echo "New Image: $IMAGE"
+          
+          DRY_RUN_FLAG=""
+          if [[ "${{ inputs.dry_run }}" == "true" ]]; then
+            DRY_RUN_FLAG="--dry-run=server"
+          fi
+          
+          kubectl set image "deployment/$DEPLOYMENT" "$CONTAINER=$IMAGE" \
+            -n "$NAMESPACE" $DRY_RUN_FLAG 2>&1 | tee patch-output.txt
+          
+          if [[ $? -ne 0 ]]; then
+            echo "::error::Failed to set new image for deployment"
+            exit 1
+          fi
+          
+          if [[ "${{ inputs.dry_run }}" != "true" ]]; then
+            echo "📊 Waiting for rollout status..."
+            kubectl rollout status "deployment/$DEPLOYMENT" -n "$NAMESPACE" --timeout=${{ inputs.timeout }}
+          else
+            echo "✅ Dry run completed successfully"
+          fi
+
+      - name: Set Result
+        id: result
+        if: always()
+        run: |
+          if [[ "${{ steps.patch.outcome }}" == "success" ]]; then
+            echo "status=success" >> $GITHUB_OUTPUT
+          else
+            echo "status=failed" >> $GITHUB_OUTPUT
+          fi
