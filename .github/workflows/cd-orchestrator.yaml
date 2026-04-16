@@ -138,7 +138,6 @@ jobs:
       ecs_cluster_name: ${{ steps.extract.outputs.ecs_cluster_name }}
       ecs_service_name: ${{ steps.extract.outputs.ecs_service_name }}
       task_definition_family: ${{ steps.extract.outputs.task_definition_family }}
-      container_name: ${{ steps.extract.outputs.container_name }}
       # Common
       health_check_enabled: ${{ steps.extract.outputs.health_check_enabled }}
       health_check_endpoint: ${{ steps.extract.outputs.health_check_endpoint }}
