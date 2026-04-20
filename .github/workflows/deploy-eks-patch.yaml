@@ -59,6 +59,10 @@ on:
         description: "Rollout timeout (e.g., 5m)"
         type: string
         default: "5m"
+      service_name:
+        description: "Name of the Kubernetes service (for URL discovery)"
+        type: string
+        default: ""
 
     outputs:
       status:
@@ -169,9 +173,20 @@ jobs:
             exit 0
           fi
 
-          # If no ingress host, try to get hostname from Service of type LoadBalancer
-          SVC_URL=$(kubectl get svc -n "${{ inputs.namespace }}" \
-            -o jsonpath='{.items[?(@.spec.type=="LoadBalancer")].status.loadBalancer.ingress[0].hostname}' 2>/dev/null || echo "")
+          # If no ingress host, try to get hostname from Service
+          # Priority: 1. Specific service_name (if provided), 2. Any LoadBalancer in namespace
+          SVC_FILTER=""
+          if [[ -n "${{ inputs.service_name }}" ]]; then
+            SVC_FILTER="${{ inputs.service_name }}"
+          fi
+
+          if [[ -n "$SVC_FILTER" ]]; then
+            SVC_URL=$(kubectl get svc "$SVC_FILTER" -n "${{ inputs.namespace }}" \
+              -o jsonpath='{.status.loadBalancer.ingress[0].hostname}' 2>/dev/null || echo "")
+          else
+            SVC_URL=$(kubectl get svc -n "${{ inputs.namespace }}" \
+              -o jsonpath='{.items[?(@.spec.type=="LoadBalancer")].status.loadBalancer.ingress[0].hostname}' 2>/dev/null || echo "")
+          fi
           
           if [[ -n "$SVC_URL" ]]; then
             echo "url=http://$SVC_URL" >> $GITHUB_OUTPUT

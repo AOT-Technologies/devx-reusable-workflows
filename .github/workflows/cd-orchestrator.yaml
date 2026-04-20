@@ -284,6 +284,7 @@ jobs:
               DEPLOY_METHOD=$(yq ".deployment.environments.$ENV.method // .deployment.method // \"helm\"" $CONFIG_FILE)
               DEPLOY_NAME=$(yq ".deployment.environments.$ENV.deployment_name // \"\"" $CONFIG_FILE)
               CONT_NAME=$(yq ".deployment.environments.$ENV.container_name // \"\"" $CONFIG_FILE)
+              SVC_NAME=$(yq ".deployment.environments.$ENV.service_name // \"\"" $CONFIG_FILE)
               
               echo "cluster_name=$CLUSTER" >> $GITHUB_OUTPUT
               echo "namespace=$NAMESPACE" >> $GITHUB_OUTPUT
@@ -295,6 +296,7 @@ jobs:
               echo "deployment_method=$DEPLOY_METHOD" >> $GITHUB_OUTPUT
               echo "deployment_name=$DEPLOY_NAME" >> $GITHUB_OUTPUT
               echo "container_name=$CONT_NAME" >> $GITHUB_OUTPUT
+              echo "service_name=$SVC_NAME" >> $GITHUB_OUTPUT
               ;;
             
             k8s)
@@ -442,6 +444,7 @@ jobs:
       aws_region: ${{ needs.validate-and-load.outputs.aws_region }}
       role_to_assume: ${{ needs.validate-and-load.outputs.role_to_assume }}
       dry_run: ${{ inputs.dry_run }}
+      service_name: ${{ needs.validate-and-load.outputs.service_name }}
 
   # EC2 DEPLOYMENT (via reusable module - SSM or SSH)
   deploy-ec2:
