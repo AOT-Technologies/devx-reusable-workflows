@@ -211,7 +211,7 @@ jobs:
       install_command: ${{ fromJson(needs.load-config.outputs.config).build.install_command || 'npm ci --prefer-offline --no-audit' }}
       run_tests: ${{ fromJson(needs.load-config.outputs.config).build.run_tests != false }}
       test_script: ${{ fromJson(needs.load-config.outputs.config).build.test_script || 'test' }}
-      run_build: ${{ fromJson(needs.load-config.outputs.config).build.run_build == true }}
+      run_build: ${{ fromJson(needs.load-config.outputs.config).build.build_script != null }}
       build_script: ${{ fromJson(needs.load-config.outputs.config).build.build_script || 'build' }}
       artifact_path: ${{ fromJson(needs.load-config.outputs.config).build.artifact_path || '' }}
       artifact_name: ${{ needs.load-config.outputs.artifact_name }}
@@ -284,6 +284,10 @@ jobs:
     if: |
       always() && 
       fromJson(needs.load-config.outputs.config).docker.enabled == true &&
+      needs.load-config.result == 'success' &&
+      (needs.build-node.result == 'success' || needs.build-node.result == 'skipped') &&
+      (needs.build-python.result == 'success' || needs.build-python.result == 'skipped') &&
+      (needs.build-maven.result == 'success' || needs.build-maven.result == 'skipped') &&
       !contains(needs.*.result, 'failure') && 
       !contains(needs.*.result, 'cancelled')
     
