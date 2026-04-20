@@ -208,6 +208,7 @@ jobs:
     with:
       working_directory: ${{ fromJson(needs.load-config.outputs.config).project.working_directory || '.' }}
       node_version: ${{ fromJson(needs.load-config.outputs.config).project.version || '20' }}
+      install_command: ${{ fromJson(needs.load-config.outputs.config).build.install_command || 'npm ci --prefer-offline --no-audit' }}
       run_tests: ${{ fromJson(needs.load-config.outputs.config).build.run_tests != false }}
       test_script: ${{ fromJson(needs.load-config.outputs.config).build.test_script || 'test' }}
       run_build: ${{ fromJson(needs.load-config.outputs.config).build.run_build == true }}
