@@ -9,6 +9,8 @@ in that major line.
 
 ## [Unreleased]
 
+## [1.1.1]
+
 ### Security
 
 - **Closed a JavaScript injection in the SonarQube PR-comment step.**
@@ -42,6 +44,48 @@ in that major line.
   project* should adopt from how this repository is actually maintained, where
   tagging replaces deployment. `README.md` and `CONTRIBUTING.md` updated to
   match, and `development` has been fast-forwarded to `main`.
+
+- **Every third-party action moved to its current major.** `v1.1.0` pinned each
+  action at the major already in use, so the first Dependabot run proposed the
+  backlog all at once. Each bump was reviewed against its upstream breaking
+  changes *and* against the inputs this repository actually passes, verified by
+  fetching `action.yml` at the new commit SHA.
+
+  | Action | From | To |
+  |---|---|---|
+  | `actions/checkout` | 4.4.0 | 7.0.1 |
+  | `actions/setup-node` | 4.4.0 | 7.0.0 |
+  | `actions/setup-python` | 5.6.0 | 7.0.0 |
+  | `actions/setup-java` | 4.9.1 | 6.0.0 |
+  | `actions/upload-artifact` | 4.6.2 | 7.0.1 |
+  | `actions/download-artifact` | 4.3.0 | 8.0.1 |
+  | `actions/github-script` | 7.1.0 | 9.0.0 |
+  | `aws-actions/configure-aws-credentials` | 4.3.1 | 6.2.3 |
+  | `azure/setup-helm` | 4.3.1 | 5.0.1 |
+  | `docker/login-action` | 3.7.0 | 4.6.0 |
+  | `docker/setup-buildx-action` | 3.12.0 | 4.3.0 |
+  | `docker/build-push-action` | 5.4.0 | 7.3.0 |
+  | `aquasecurity/trivy-action` | 0.24.0 | 0.36.0 |
+  | `anchore/sbom-action` | 0.16.0 | 0.24.2 |
+  | `bridgecrewio/checkov-action` | 12.2850.0 | 12.3122.0 |
+
+  No documented breaking change applies to how these workflows call them:
+  `download-artifact` v5 changed paths only for downloads **by ID** (this repo
+  downloads by name); `github-script` v9 dropped `require('@actions/github')`
+  (the script uses only the injected globals); `configure-aws-credentials` v5
+  changed invalid **boolean** input handling (only strings are passed);
+  `setup-buildx-action` v4 and `build-push-action` v7 removed deprecated
+  inputs and envs that are not used here; `setup-node` v5 added automatic
+  package-manager caching, which the explicit `cache:` input overrides.
+
+  **Two consequences for consumers.** Most of these now run on Node 24 and
+  require Actions Runner **2.327.1 or later** — irrelevant on GitHub-hosted
+  runners, but self-hosted runners must be updated first.
+  `docker/build-push-action` v6+ also generates a build summary and exports a
+  build record artifact per build; set `DOCKER_BUILD_SUMMARY: false` to opt out.
+
+  These bumps are static-verified only. No repository consumes these workflows
+  yet, so no end-to-end pipeline run has exercised them.
 
 ## [1.1.0]
 
@@ -148,6 +192,7 @@ upload, Docker build and push, deployment modules for EKS, ECS, EC2 and generic
 Kubernetes, security scanning (Semgrep, SonarQube, Trivy, Checkov, Syft, Grype),
 health checks, rollback and Google Chat notifications.
 
-[Unreleased]: https://github.com/AOT-Technologies/devx-reusable-workflows/compare/v1.1.0...HEAD
+[Unreleased]: https://github.com/AOT-Technologies/devx-reusable-workflows/compare/v1.1.1...HEAD
+[1.1.1]: https://github.com/AOT-Technologies/devx-reusable-workflows/compare/v1.1.0...v1.1.1
 [1.1.0]: https://github.com/AOT-Technologies/devx-reusable-workflows/compare/v1.0.0...v1.1.0
 [1.0.0]: https://github.com/AOT-Technologies/devx-reusable-workflows/releases/tag/v1.0.0
