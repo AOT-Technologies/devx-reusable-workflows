@@ -141,9 +141,15 @@ Record every release in [CHANGELOG.md](CHANGELOG.md) before tagging.
 
 ## Pull requests
 
-- Follow the branching model in [docs/BRANCHING.md](docs/BRANCHING.md): branch
-  from `development` as `feature/<jira-ticket>`, PR into `development`, then
-  `development` → `main`. Neither `main` nor `development` accepts direct pushes.
+- Branch as `feature/<jira-ticket>` and open a PR. A single self-contained
+  change can target `main` directly; use `development` when several changes need
+  to be integrated and reviewed together before a release. Neither `main` nor
+  `development` accepts direct pushes. See
+  [docs/BRANCHING.md](docs/BRANCHING.md#part-2-for-this-repository-devx-reusable-workflows)
+  — note that the four-stage deploy flow described there applies to *consuming*
+  project repositories, not to this one.
+- After anything merges to `main`, fast-forward `development` so it cannot drift:
+  `git push origin origin/main:refs/heads/development`.
 - Use [Conventional Commits](https://www.conventionalcommits.org/) — the
   changelog is grouped by type.
 - Say in the description what you ran to verify. "actionlint and the validator

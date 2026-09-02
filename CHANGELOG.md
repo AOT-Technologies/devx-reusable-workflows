@@ -9,6 +9,17 @@ in that major line.
 
 ## [Unreleased]
 
+### Changed
+
+- **Split `docs/BRANCHING.md` by audience.** It described the four-stage
+  deployment lifecycle (feature → dev → QA → production) as though it applied to
+  this repository, which ships workflows and deploys nothing. Stages 2–4 were
+  therefore unreachable here, and the `development` branch drifted 26 commits
+  behind `main` as a result. The page now separates the model a *consuming
+  project* should adopt from how this repository is actually maintained, where
+  tagging replaces deployment. `README.md` and `CONTRIBUTING.md` updated to
+  match, and `development` has been fast-forwarded to `main`.
+
 ## [1.1.0]
 
 Maintainability and security hardening pass. No interface was removed or
