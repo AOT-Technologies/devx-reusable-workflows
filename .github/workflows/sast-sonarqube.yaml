@@ -360,23 +360,37 @@ jobs:
       - name: Comment PR (if pull request)
         if: github.event_name == 'pull_request'
         uses: actions/github-script@3a2844b7e9c422d3c10d287c895573f7108da1b3 # v9.0.0
+        # Values reach the script through env, never through ${{ }}. A GitHub
+        # expression is spliced into the script text before Node parses it, so a
+        # project key containing a quote would execute arbitrary JavaScript here
+        # -- with a token that holds pull-requests: write.
+        env:
+          SONAR_PROJECT_KEY: ${{ inputs.sonar_project_key }}
+          SONAR_HOST_URL: ${{ inputs.sonar_host_url }}
         with:
           script: |
-            const projectKey = '${{ inputs.sonar_project_key }}';
-            const hostUrl = '${{ inputs.sonar_host_url }}';
-            const dashboardUrl = hostUrl === 'https://sonarcloud.io' 
-              ? `https://sonarcloud.io/dashboard?id=${projectKey}`
-              : `${hostUrl}/dashboard?id=${projectKey}`;
-            
+            const projectKey = process.env.SONAR_PROJECT_KEY ?? '';
+            const hostUrl = (process.env.SONAR_HOST_URL ?? '').replace(/\/+$/, '');
+
+            const base = hostUrl || 'https://sonarcloud.io';
+            // encodeURIComponent leaves ( and ) alone, and an unescaped paren
+            // terminates a markdown link early.
+            const enc = (s) => encodeURIComponent(s)
+              .replace(/[()]/g, (c) => '%' + c.charCodeAt(0).toString(16).toUpperCase());
+            const dashboardUrl = `${base}/dashboard?id=${enc(projectKey)}`;
+
+            // Neutralise backticks so the key cannot break out of the code span.
+            const safeKey = projectKey.replace(/`/g, "'");
+
             const comment = `## 🔍 SonarQube Analysis
-            
-            **Project:** \`${projectKey}\`
-            
+
+            **Project:** \`${safeKey}\`
+
             📊 [View Detailed Report](${dashboardUrl})
-            
+
             > Analysis completed for commit ${context.sha.substring(0, 7)}`;
-            
-            github.rest.issues.createComment({
+
+            await github.rest.issues.createComment({
               issue_number: context.issue.number,
               owner: context.repo.owner,
               repo: context.repo.repo,

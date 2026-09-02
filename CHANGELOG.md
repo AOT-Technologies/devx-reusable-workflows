@@ -9,6 +9,29 @@ in that major line.
 
 ## [Unreleased]
 
+### Security
+
+- **Closed a JavaScript injection in the SonarQube PR-comment step.**
+  `sast-sonarqube.yaml` interpolated `sonar_project_key` and `sonar_host_url`
+  straight into the `script:` body of `actions/github-script`. A GitHub
+  expression is spliced into the script as text before Node parses it, so a
+  project key containing a quote would have executed arbitrary JavaScript with
+  a token holding `pull-requests: write`. Both values now arrive through the
+  step's `env:` and are read via `process.env`. The comment call is also
+  awaited, the dashboard URL is percent-encoded, and backticks in the key can
+  no longer break out of the markdown code span.
+
+  This was the same injection class already removed from every `run:` block,
+  but in a different language — `script:` is not a shell script, so the earlier
+  pass did not cover it.
+
+- **`validate_workflows.py` now rejects `${{ }}` in any executable body** —
+  both `run:` scripts and `actions/github-script` `script:` bodies — so neither
+  form can regress. actionlint does not close this gap on its own: its
+  expression-injection rule covers a fixed set of known-untrusted contexts and
+  treats `inputs.*` as safe, which it is not for a reusable workflow whose
+  inputs come from a caller.
+
 ### Changed
 
 - **Split `docs/BRANCHING.md` by audience.** It described the four-stage
