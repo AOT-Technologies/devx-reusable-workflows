@@ -183,7 +183,7 @@ permissions:
   contents: read
   id-token: write  # AWS OIDC
   packages: write  # GHCR push
-  actions: write   # Artifact uploads
+  actions: read           # artifact + SARIF metadata
 
 jobs:
   build-push:
@@ -198,10 +198,10 @@ jobs:
       # 1. SETUP
       # ----------------------------------------------------------------------
       - name: Checkout Code
-        uses: actions/checkout@v4.1.1
+        uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
 
       - name: Set up Docker Buildx
-        uses: docker/setup-buildx-action@v3.0.0
+        uses: docker/setup-buildx-action@8d2750c68a42422c14e847fe6c8ac0403b4cbd6f # v3
 
       # ----------------------------------------------------------------------
       # 2. REGISTRY AUTHENTICATION (Strategy Pattern)
@@ -210,7 +210,7 @@ jobs:
       # MODE A: AWS ECR (OIDC - No Keys)
       - name: Configure AWS Credentials (OIDC)
         if: inputs.registry_type == 'ecr'
-        uses: aws-actions/configure-aws-credentials@v4.0.2
+        uses: aws-actions/configure-aws-credentials@7474bc4690e29a8392af63c5b98e7449536d5c3a # v4
         with:
           role-to-assume: ${{ inputs.role_to_assume }}
           aws-region: ${{ inputs.aws_region }}
@@ -218,12 +218,12 @@ jobs:
       - name: Login to Amazon ECR
         if: inputs.registry_type == 'ecr'
         id: login-ecr
-        uses: aws-actions/amazon-ecr-login@v2.0.1
+        uses: aws-actions/amazon-ecr-login@03f1aad4c6c7ffd436567f42f9384779290529bd # v2
 
       # MODE B: Generic Registry (Docker Hub, GHCR, etc.)
       - name: Login to Generic Registry
         if: inputs.registry_type == 'generic'
-        uses: docker/login-action@v3.0.0
+        uses: docker/login-action@c94ce9fb468520275223c153574b00df6fe4bcc9 # v3
         with:
           registry: ${{ inputs.registry_url }}
           username: ${{ secrets.registry_username }}
@@ -232,7 +232,7 @@ jobs:
       # MODE C: Nexus Docker Registry
       - name: Login to Nexus Docker Registry
         if: inputs.registry_type == 'nexus'
-        uses: docker/login-action@v3.0.0
+        uses: docker/login-action@c94ce9fb468520275223c153574b00df6fe4bcc9 # v3
         with:
           registry: ${{ inputs.nexus_url }}
           username: ${{ secrets.NEXUS_USERNAME }}
@@ -279,17 +279,20 @@ jobs:
       - name: Download Artifact from GitHub (Fallback)
         if: inputs.nexus_artifact_path == '' && inputs.artifact_name != ''
         id: download_gh
-        uses: actions/download-artifact@v4.1.7
+        uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4
         with:
           name: ${{ inputs.artifact_name }}
           path: .
       
       - name: Setup Artifact Name Output
         id: artifact_info
+        env:
+          STEP_DOWNLOAD_ARTIFACT_NAME: ${{ steps.download.outputs.artifact_name }}
+          ARTIFACT_NAME: ${{ inputs.artifact_name }}
         run: |
-          if [[ -n "${{ steps.download.outputs.artifact_name }}" ]]; then
-            echo "name=${{ steps.download.outputs.artifact_name }}" >> $GITHUB_OUTPUT
-          elif [[ -n "${{ inputs.artifact_name }}" ]]; then
+          if [[ -n "${STEP_DOWNLOAD_ARTIFACT_NAME}" ]]; then
+            echo "name=${STEP_DOWNLOAD_ARTIFACT_NAME}" >> $GITHUB_OUTPUT
+          elif [[ -n "${ARTIFACT_NAME}" ]]; then
             # When downloading from GitHub, we need to find what was inside the artifact
             # Since the build scripts upload a single file, we can look for it
             FILENAME=$(ls *.whl *.tgz *.jar 2>/dev/null | head -n 1)
@@ -428,7 +431,7 @@ jobs:
 
       - name: Build and Push Docker Image
         id: build
-        uses: docker/build-push-action@v5.1.0
+        uses: docker/build-push-action@ca052bb54ab0790a636c9b5f226502c73d547a25 # v5
         with:
           context: ${{ inputs.working_directory }}
           file: ${{ inputs.working_directory }}/${{ inputs.dockerfile }}
@@ -445,15 +448,21 @@ jobs:
       # 6. OUTPUT SUMMARY
       # ----------------------------------------------------------------------
       - name: Summary
+        env:
+          STEP_META_IMAGE_URI: ${{ steps.meta.outputs.image_uri }}
+          STEP_BUILD_DIGEST: ${{ steps.build.outputs.digest }}
+          STEP_META_TAG: ${{ steps.meta.outputs.tag }}
+          REGISTRY_TYPE: ${{ inputs.registry_type }}
+          PLATFORMS: ${{ inputs.platforms }}
         run: |
           echo "# 🐳 Docker Build Complete" >> $GITHUB_STEP_SUMMARY
           echo "" >> $GITHUB_STEP_SUMMARY
           echo "| Attribute | Value |" >> $GITHUB_STEP_SUMMARY
           echo "|-----------|-------|" >> $GITHUB_STEP_SUMMARY
-          echo "| **Image URI** | \`${{ steps.meta.outputs.image_uri }}\` |" >> $GITHUB_STEP_SUMMARY
-          echo "| **Digest** | \`${{ steps.build.outputs.digest }}\` |" >> $GITHUB_STEP_SUMMARY
-          echo "| **Tag** | \`${{ steps.meta.outputs.tag }}\` |" >> $GITHUB_STEP_SUMMARY
-          echo "| **Registry** | ${{ inputs.registry_type }} |" >> $GITHUB_STEP_SUMMARY
-          echo "| **Platforms** | ${{ inputs.platforms }} |" >> $GITHUB_STEP_SUMMARY
+          echo "| **Image URI** | \`${STEP_META_IMAGE_URI}\` |" >> $GITHUB_STEP_SUMMARY
+          echo "| **Digest** | \`${STEP_BUILD_DIGEST}\` |" >> $GITHUB_STEP_SUMMARY
+          echo "| **Tag** | \`${STEP_META_TAG}\` |" >> $GITHUB_STEP_SUMMARY
+          echo "| **Registry** | ${REGISTRY_TYPE} |" >> $GITHUB_STEP_SUMMARY
+          echo "| **Platforms** | ${PLATFORMS} |" >> $GITHUB_STEP_SUMMARY
           echo "" >> $GITHUB_STEP_SUMMARY
           echo "✅ Image pushed successfully to registry" >> $GITHUB_STEP_SUMMARY
