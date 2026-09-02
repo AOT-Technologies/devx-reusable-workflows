@@ -30,6 +30,16 @@ To ensure the integrity of the strategy, the following **Branch Protection Rules
 2.  **Protect matching branches**:
     -   Check **"Require a pull request before merging"** (Development ➡️ Main).
     -   Check **"Require status checks to pass before merging"**.
+    -   Check **"Require review from Code Owners"** (see [.github/CODEOWNERS](../.github/CODEOWNERS)).
+
+> **Note for this repository.** The status checks above (`DevX CI Pipeline`) are
+> the ones a *consuming project* repository requires. `devx-reusable-workflows`
+> does not run the DevX pipeline on itself -- it validates its own workflows.
+> Require these instead, from [repo-ci.yaml](../.github/workflows/repo-ci.yaml):
+>
+> - `Lint workflows`
+> - `Validate workflow contracts`
+> - `Validate example configs`
 
 ---
 
