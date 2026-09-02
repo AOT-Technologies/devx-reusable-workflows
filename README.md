@@ -199,9 +199,16 @@ new alias. Release history is in [CHANGELOG.md](CHANGELOG.md); the process is in
 ---
 
 ## 🏷️ GitHub Branching Strategy
-- main: Production-ready code only.
-- development: Integration branch for new features. CD triggers here for dev/qa environments.
-- feature/*: Individual work branches linked to Jira tickets.
+
+The model DevX recommends for a **consuming project repository**:
+
+- `main` — production-ready code only.
+- `development` — integration branch for new features. CD triggers here for dev/qa environments.
+- `feature/*` — individual work branches linked to Jira tickets.
+
+This repository is maintained differently: it ships workflows rather than a
+deployable application, so it has no environments and releases via tags instead.
+[docs/BRANCHING.md](docs/BRANCHING.md) documents both.
 
 ---
 ## 🤝 Contributing
