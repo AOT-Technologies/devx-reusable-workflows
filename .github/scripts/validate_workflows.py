@@ -12,6 +12,17 @@ GitHub reports it as an empty string at run time rather than as an error:
                           outputs actually exist on the callee
   4. secret declarations  every `secrets.X` used is declared in workflow_call
   5. action pinning       no third-party action on a mutable tag or branch
+  6. no code injection    no `${{ }}` inside a `run:` script or a
+                          `actions/github-script` `script:` body
+
+Check 6 is the one actionlint will not fully make for you. A GitHub expression
+is spliced into the script *as text* before bash or Node ever parses it, so any
+metacharacter in the value is executed with whatever the job's token can reach.
+Reading the same value from `env:` makes it data. actionlint's own
+expression-injection rule only covers a handful of known-untrusted contexts and
+treats `inputs.*` as safe -- which it is not for a reusable workflow, whose
+inputs come from a caller that may well be interpolating a branch name or a PR
+title into them.
 
 Run from the repository root:  python .github/scripts/validate_workflows.py
 """
@@ -27,6 +38,7 @@ import yaml
 WORKFLOW_DIR = os.path.join('.github', 'workflows')
 SELF_PREFIX = 'AOT-Technologies/devx-reusable-workflows/.github/workflows/'
 SHA_RE = re.compile(r'^[0-9a-f]{40}$')
+EXPR_RE = re.compile(r'\$\{\{(.+?)\}\}', re.S)
 
 # Workflows that are entrypoints for humans/CI rather than reusable modules.
 NON_REUSABLE = {'repo-ci.yaml', 'release.yaml'}
@@ -82,6 +94,32 @@ def main() -> int:
         for job_name, job in jobs.items():
             if not isinstance(job, dict):
                 continue
+
+            # ---- 6. no expression interpolated into executable script -------
+            for step in job.get('steps') or []:
+                if not isinstance(step, dict):
+                    continue
+                label = step.get('name') or step.get('uses') or step.get('id') or '<step>'
+                with_ = step.get('with') or {}
+                bodies = [('run', step.get('run'))]
+                # actions/github-script evaluates `script:` as Node.
+                if str(step.get('uses') or '').startswith('actions/github-script@'):
+                    bodies.append(('with.script', with_.get('script')))
+
+                for field, text in bodies:
+                    if not isinstance(text, str):
+                        continue
+                    if field == 'run':
+                        lang, how = 'shell', 'a quoted "$VAR"'
+                    else:
+                        lang, how = 'JavaScript', 'process.env.VAR'
+                    for expr in sorted(set(EXPR_RE.findall(text))):
+                        err(name,
+                            f"job '{job_name}' step '{label}': "
+                            f"${{{{ {expr.strip()} }}}} is interpolated into {field}:. "
+                            f"The value is spliced into the {lang} as text before it is "
+                            f"parsed, so it executes. Pass it through the step's env: "
+                            f"and read it as {how} instead.")
 
             needs = job.get('needs') or []
             needs = {needs} if isinstance(needs, str) else set(needs)

@@ -37,16 +37,19 @@ failures GitHub reports as an empty string at run time rather than as an error:
 - every `secrets.X` used is declared in `on.workflow_call.secrets`
 - no third-party action is on a mutable tag or branch
 - every reusable module declares a top-level `permissions:` block
+- no `${{ }}` appears inside a `run:` script or a `github-script` `script:` body
 
 ## Rules for workflow code
 
 These are not style preferences. Each one exists because its absence has a
 specific failure mode; see [SECURITY.md](SECURITY.md#security-properties-these-workflows-are-built-to-hold).
 
-**Never interpolate `${{ … }}` into a `run:` block.** Pass the value through
-step-level `env:` and read it as `"$VAR"`. A GitHub expression is spliced into
-the script textually before bash sees it, so any metacharacter in the value is
-executed. An environment variable is data.
+**Never interpolate `${{ … }}` into anything that is executed as code** — a
+`run:` block, or the `script:` body of `actions/github-script`. Pass the value
+through step-level `env:` and read it as `"$VAR"` in shell or
+`process.env.VAR` in JavaScript. A GitHub expression is spliced in textually
+before bash or Node parses it, so any metacharacter in the value is executed.
+An environment variable is data. The validator rejects both cases.
 
 ```yaml
 # no
@@ -57,6 +60,20 @@ executed. An environment variable is data.
     RELEASE: ${{ inputs.release }}
     CHART: ${{ inputs.chart }}
   run: helm upgrade "$RELEASE" "$CHART"
+```
+
+```yaml
+# no  -- a project key containing a quote executes arbitrary JavaScript
+- uses: actions/github-script@<sha> # v9
+  with:
+    script: const key = '${{ inputs.project_key }}';
+
+# yes
+- uses: actions/github-script@<sha> # v9
+  env:
+    PROJECT_KEY: ${{ inputs.project_key }}
+  with:
+    script: const key = process.env.PROJECT_KEY ?? '';
 ```
 
 **Build commands as argv arrays, never as strings.** Assembling a command into a

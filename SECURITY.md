@@ -43,7 +43,7 @@ enforces the mechanical ones in CI.
 
 | Property | How it is maintained |
 |---|---|
-| No untrusted value reaches a shell as code | `${{ … }}` is never interpolated into a `run:` block. Values are passed through step-level `env:` and read as `"$VAR"`, so shell metacharacters stay data. |
+| No untrusted value reaches an interpreter as code | `${{ … }}` is never interpolated into a `run:` block or into an `actions/github-script` `script:` body. Values pass through step-level `env:` and are read as `"$VAR"` in shell or `process.env.VAR` in JavaScript, so metacharacters stay data. Enforced by `validate_workflows.py`. |
 | No command strings | Commands are built as bash argv arrays, never assembled as strings and re-parsed with `eval`. The exception is the consumer's own `build_script` / `test_script` / `install_command`, which are commands by definition and are marked as such. |
 | Immutable third-party code | Every third-party action is pinned to a full 40-character commit SHA with the version in a trailing comment. Tags and branches are mutable and are rejected by CI. Downloaded binaries are pinned by version and verified by checksum. |
 | Least privilege | Every workflow declares a top-level `permissions:` block. Elevated scopes (`contents: write`, `packages: write`) are set on the single job that needs them, not workflow-wide. |
