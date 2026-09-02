@@ -210,7 +210,7 @@ jobs:
       # MODE A: AWS ECR (OIDC - No Keys)
       - name: Configure AWS Credentials (OIDC)
         if: inputs.registry_type == 'ecr'
-        uses: aws-actions/configure-aws-credentials@7474bc4690e29a8392af63c5b98e7449536d5c3a # v4
+        uses: aws-actions/configure-aws-credentials@e6de054238d6b7531b4efff3b6587d9aade6a06c # v6.2.3
         with:
           role-to-assume: ${{ inputs.role_to_assume }}
           aws-region: ${{ inputs.aws_region }}
