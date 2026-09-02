@@ -196,7 +196,7 @@ jobs:
       # SETUP SYFT
       # ------------------------------------------------------------------------
       - name: Install Syft
-        uses: anchore/sbom-action/download-syft@e8d2a6937ecead383dfe75190d104edd1f9c5751 # v0.16.0
+        uses: anchore/sbom-action/download-syft@3ad7283483fc7af8ff2b4ea19663c2d5ca935e26 # v0.24.2
 
       - name: Verify Syft Installation
         run: |
