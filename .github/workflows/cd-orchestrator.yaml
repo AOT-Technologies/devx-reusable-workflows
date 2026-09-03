@@ -24,13 +24,18 @@ on:
     inputs:
       # --- REQUIRED INPUTS ---
       environment:
-        description: "Target environment: dev, qa, staging, production"
+        description: |
+          Environment to deploy. Any name the config defines under
+          deployment.environments is valid -- teams use demo, uat, sit, preprod
+          and others, so this workflow does not keep a list of its own.
         type: string
-        required: true
+        required: false
+        default: "dev"
       image_uri:
         description: "Docker image URI to deploy"
         type: string
-        required: true
+        required: false
+        default: ""
       
       # --- OPTIONAL INPUTS ---
       config_path:
@@ -74,14 +79,10 @@ on:
   workflow_dispatch:
     inputs:
       environment:
-        description: "Target environment"
-        type: choice
-        options:
-          - dev
-          - qa
-          - staging
-          - production
+        description: "Environment to deploy (must exist in the config)"
+        type: string
         required: true
+        default: "dev"
       image_uri:
         description: "Docker image URI to deploy"
         type: string
@@ -125,6 +126,8 @@ jobs:
       deployment_method: ${{ steps.extract.outputs.deployment_method }}
       deployment_name: ${{ steps.extract.outputs.deployment_name }}
       container_name: ${{ steps.extract.outputs.container_name }}
+      workload_kind: ${{ steps.extract.outputs.workload_kind }}
+      additional_workloads: ${{ steps.extract.outputs.additional_workloads }}
       # EKS-specific
       helm_chart_path: ${{ steps.extract.outputs.helm_chart_path }}
       helm_release_name: ${{ steps.extract.outputs.helm_release_name }}
@@ -175,10 +178,19 @@ jobs:
           # Trim whitespace from inputs (prevents YAML multiline newline issues)
           IMAGE_URI=$(echo "${IMAGE_URI}" | xargs)
           
-          # Validate environment value
-          if [[ ! "${ENVIRONMENT}" =~ ^(dev|qa|staging|production)$ ]]; then
-            echo "::error::Invalid environment: ${ENVIRONMENT}"
-            echo "::error::Must be one of: dev, qa, staging, production"
+          # Check the shape only. Which environments exist is the config's to
+          # decide -- it is validated below against deployment.environments --
+          # and a fixed list here would reject perfectly ordinary names like
+          # demo, uat or preprod. The pattern still keeps the value safe to use
+          # as a yq path segment and a Kubernetes name.
+          if [[ ! "${ENVIRONMENT}" =~ ^[a-z0-9]([a-z0-9-]*[a-z0-9])?$ ]]; then
+            echo "::error::Invalid environment name: '${ENVIRONMENT}'"
+            echo "::error::Use lowercase letters, digits and hyphens (e.g. dev, demo, pre-prod)."
+            exit 1
+          fi
+
+          if [[ -z "$IMAGE_URI" ]]; then
+            echo "::error::image_uri is required; pass the image built by CI."
             exit 1
           fi
           
@@ -279,7 +291,10 @@ jobs:
           
           # AWS settings
           REGION=$(yq ".deployment.environments.$ENV.region // .aws.default_region // \"us-east-1\"" $CONFIG_FILE)
-          ROLE=$(yq ".aws.role_to_assume // \"\"" $CONFIG_FILE)
+          # Environment-scoped roles are the norm for env isolation: each is
+          # usually trusted for one namespace only, so falling back to a global
+          # role would authenticate and then be denied by RBAC in that namespace.
+          ROLE=$(yq ".deployment.environments.$ENV.aws.role_to_assume // .deployment.environments.$ENV.role_to_assume // .aws.role_to_assume // \"\"" $CONFIG_FILE)
           echo "aws_region=$REGION" >> $GITHUB_OUTPUT
           echo "role_to_assume=$ROLE" >> $GITHUB_OUTPUT
           
@@ -288,8 +303,8 @@ jobs:
             eks)
               CLUSTER=$(yq ".deployment.environments.$ENV.cluster_name // \"\"" $CONFIG_FILE)
               NAMESPACE=$(yq ".deployment.environments.$ENV.namespace // \"default\"" $CONFIG_FILE)
-              CHART=$(yq ".deployment.helm.chart_path // .deployment.environments.$ENV.helm.chart_path // \"\"" $CONFIG_FILE)
-              RELEASE=$(yq ".deployment.helm.release_name // .deployment.environments.$ENV.helm.release_name // \"\"" $CONFIG_FILE)
+              CHART=$(yq ".deployment.environments.$ENV.helm.chart_path // .deployment.helm.chart_path // \"\"" $CONFIG_FILE)
+              RELEASE=$(yq ".deployment.environments.$ENV.helm.release_name // .deployment.helm.release_name // \"\"" $CONFIG_FILE)
               VALUES=$(yq ".deployment.environments.$ENV.values_file // .deployment.environments.$ENV.helm.values_file // \"\"" $CONFIG_FILE)
               SET_VALUES=$(yq ".deployment.environments.$ENV.helm.set_values // \"\"" $CONFIG_FILE)
               
@@ -303,6 +318,9 @@ jobs:
               DEPLOY_NAME=$(yq ".deployment.environments.$ENV.deployment_name // \"\"" $CONFIG_FILE)
               CONT_NAME=$(yq ".deployment.environments.$ENV.container_name // \"\"" $CONFIG_FILE)
               SVC_NAME=$(yq ".deployment.environments.$ENV.service_name // \"\"" $CONFIG_FILE)
+              WORKLOAD_KIND=$(yq ".deployment.environments.$ENV.workload_kind // .deployment.workload_kind // \"deployment\"" $CONFIG_FILE)
+              # -I=0 keeps this on one line, which a job output has to be.
+              EXTRA_WORKLOADS=$(yq -o=json -I=0 ".deployment.environments.$ENV.additional_workloads // .deployment.additional_workloads // []" $CONFIG_FILE)
               
               echo "cluster_name=$CLUSTER" >> $GITHUB_OUTPUT
               echo "namespace=$NAMESPACE" >> $GITHUB_OUTPUT
@@ -314,13 +332,15 @@ jobs:
               echo "deployment_method=$DEPLOY_METHOD" >> $GITHUB_OUTPUT
               echo "deployment_name=$DEPLOY_NAME" >> $GITHUB_OUTPUT
               echo "container_name=$CONT_NAME" >> $GITHUB_OUTPUT
+              echo "workload_kind=$WORKLOAD_KIND" >> $GITHUB_OUTPUT
+              echo "additional_workloads=$EXTRA_WORKLOADS" >> $GITHUB_OUTPUT
               echo "service_name=$SVC_NAME" >> $GITHUB_OUTPUT
               ;;
             
             k8s)
               NAMESPACE=$(yq ".deployment.environments.$ENV.namespace // \"default\"" $CONFIG_FILE)
-              CHART=$(yq ".deployment.helm.chart_path // .deployment.environments.$ENV.helm.chart_path // \"\"" $CONFIG_FILE)
-              RELEASE=$(yq ".deployment.helm.release_name // .deployment.environments.$ENV.helm.release_name // \"\"" $CONFIG_FILE)
+              CHART=$(yq ".deployment.environments.$ENV.helm.chart_path // .deployment.helm.chart_path // \"\"" $CONFIG_FILE)
+              RELEASE=$(yq ".deployment.environments.$ENV.helm.release_name // .deployment.helm.release_name // \"\"" $CONFIG_FILE)
               VALUES=$(yq ".deployment.environments.$ENV.values_file // .deployment.environments.$ENV.helm.values_file // \"\"" $CONFIG_FILE)
               SET_VALUES=$(yq ".deployment.environments.$ENV.helm.set_values // \"\"" $CONFIG_FILE)
 
@@ -399,11 +419,29 @@ jobs:
           echo "deployment_timeout=$TIMEOUT" >> $GITHUB_OUTPUT
 
           # Rollback settings
-          AUTO_ROLLBACK=$(yq ".deployment.environments.$ENV.auto_rollback // \"true\"" $CONFIG_FILE)
+          # Same `//` pitfall as notifications: an explicit false would be
+          # read as absent, making auto_rollback impossible to turn off.
+          AUTO_ROLLBACK=$(yq ".deployment.environments.$ENV.auto_rollback" $CONFIG_FILE)
+          if [[ "$AUTO_ROLLBACK" == "null" ]]; then
+            AUTO_ROLLBACK=$(yq ".deployment.auto_rollback" $CONFIG_FILE)
+          fi
+          if [[ "$AUTO_ROLLBACK" == "null" ]]; then
+            AUTO_ROLLBACK=true
+          fi
           echo "auto_rollback=$AUTO_ROLLBACK" >> $GITHUB_OUTPUT
           
           # Notification settings
-          NOTIFY_ENABLED=$(yq ".deployment.notifications.enabled // .deployment.environments.$ENV.notifications.enabled // \"true\"" $CONFIG_FILE)
+          # yq's // operator treats an explicit `false` as absent, so chaining
+          # it silently turns `notifications.enabled: false` back into true.
+          # Resolve the precedence with explicit null checks instead, the same
+          # way `atomic` above does.
+          NOTIFY_ENABLED=$(yq ".deployment.environments.$ENV.notifications.enabled" $CONFIG_FILE)
+          if [[ "$NOTIFY_ENABLED" == "null" ]]; then
+            NOTIFY_ENABLED=$(yq ".deployment.notifications.enabled" $CONFIG_FILE)
+          fi
+          if [[ "$NOTIFY_ENABLED" == "null" ]]; then
+            NOTIFY_ENABLED=true
+          fi
           echo "notifications_enabled=$NOTIFY_ENABLED" >> $GITHUB_OUTPUT
           
           echo "Configuration extracted successfully"
@@ -468,6 +506,8 @@ jobs:
       namespace: ${{ needs.validate-and-load.outputs.namespace }}
       deployment_name: ${{ needs.validate-and-load.outputs.deployment_name }}
       container_name: ${{ needs.validate-and-load.outputs.container_name }}
+      workload_kind: ${{ needs.validate-and-load.outputs.workload_kind }}
+      additional_workloads: ${{ needs.validate-and-load.outputs.additional_workloads }}
       aws_region: ${{ needs.validate-and-load.outputs.aws_region }}
       role_to_assume: ${{ needs.validate-and-load.outputs.role_to_assume }}
       dry_run: ${{ inputs.dry_run }}
@@ -557,6 +597,8 @@ jobs:
       inputs.dry_run != true
     uses: AOT-Technologies/devx-reusable-workflows/.github/workflows/health-check.yaml@v1
     with:
+      workload_kind: ${{ needs.validate-and-load.outputs.workload_kind }}
+      additional_workloads: ${{ needs.validate-and-load.outputs.additional_workloads }}
       environment: ${{ inputs.environment }}
       health_endpoint: ${{ needs.validate-and-load.outputs.health_check_endpoint }}
       health_url: >-
@@ -569,7 +611,12 @@ jobs:
       cluster_name: ${{ needs.validate-and-load.outputs.cluster_name }}
       aws_region: ${{ needs.validate-and-load.outputs.aws_region }}
       role_to_assume: ${{ needs.validate-and-load.outputs.role_to_assume }}
-      deployment_name: ${{ needs.validate-and-load.outputs.helm_release_name }}
+      # A patch deploy has a workload name and often no Helm release at all,
+      # so the release name is the wrong target for it -- and an empty one
+      # used to make the check silently pick a workload from the namespace.
+      deployment_name: >-
+        ${{ needs.validate-and-load.outputs.deployment_name
+          || needs.validate-and-load.outputs.helm_release_name }}
       retries: ${{ needs.validate-and-load.outputs.health_check_retries }}
       retry_interval: ${{ needs.validate-and-load.outputs.health_check_retry_interval }}
       ingress_domain: ${{ needs.validate-and-load.outputs.ingress_domain }}
@@ -580,12 +627,21 @@ jobs:
   # 5. ROLLBACK (On Health Check Failure)
   # ---------------------------------------------------------------------------
   rollback:
-    needs: [validate-and-load, deploy-eks, deploy-eks-patch, deploy-ec2, deploy-ecs, health-check]
+    needs: [validate-and-load, deploy-eks, deploy-eks-patch, deploy-ec2, deploy-ecs, deploy-k8s, health-check]
+    # A failed deploy needs reverting just as much as a failed health check --
+    # keying only on the health check meant a failed image patch or a timed-out
+    # rollout was left in place. Note a skipped health check is not a failure,
+    # so this does not fire when health checks are simply turned off.
     if: |
       always() &&
-      needs.health-check.result == 'failure' &&
+      inputs.dry_run != true &&
       needs.validate-and-load.outputs.auto_rollback == 'true' &&
-      inputs.dry_run != true
+      (needs.health-check.result == 'failure' ||
+       needs.deploy-eks.result == 'failure' ||
+       needs.deploy-eks-patch.result == 'failure' ||
+       needs.deploy-ec2.result == 'failure' ||
+       needs.deploy-ecs.result == 'failure' ||
+       needs.deploy-k8s.result == 'failure')
     uses: AOT-Technologies/devx-reusable-workflows/.github/workflows/rollback.yaml@v1
     with:
       environment: ${{ inputs.environment }}
@@ -593,6 +649,13 @@ jobs:
       cluster_name: ${{ needs.validate-and-load.outputs.cluster_name || needs.validate-and-load.outputs.ecs_cluster_name }}
       namespace: ${{ needs.validate-and-load.outputs.namespace }}
       helm_release_name: ${{ needs.validate-and-load.outputs.helm_release_name }}
+      deployment_method: ${{ needs.validate-and-load.outputs.deployment_method }}
+      workload_kind: ${{ needs.validate-and-load.outputs.workload_kind }}
+      deployment_name: ${{ needs.validate-and-load.outputs.deployment_name }}
+      additional_workloads: ${{ needs.validate-and-load.outputs.additional_workloads }}
+      # Restore the exact images the deploy replaced. Empty for the Helm and
+      # other targets, which fall back to stepping back a revision.
+      previous_images: ${{ needs.deploy-eks-patch.outputs.previous_images }}
       service_name: ${{ needs.validate-and-load.outputs.ecs_service_name }}
       task_definition_family: ${{ needs.validate-and-load.outputs.task_definition_family }}
       aws_region: ${{ needs.validate-and-load.outputs.aws_region }}

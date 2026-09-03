@@ -46,6 +46,14 @@ on:
         description: "URL of the registry (e.g., 'docker.io', 'ghcr.io'). Required for 'generic'."
         type: string
         default: ""
+      registry_username:
+        description: |
+          Username for the generic registry. Prefer this over the secret of the
+          same name: a value passed as a secret is masked, and GitHub drops any
+          job output containing a masked value -- which silently empties
+          image_uri downstream when the username also appears in the image name.
+        type: string
+        default: ""
       
       # --- MODE: AWS ECR ---
       aws_region:
@@ -98,6 +106,23 @@ on:
         description: "Push the image to the registry?"
         type: boolean
         default: true
+      export_image_artifact:
+        description: |
+          When not pushing, save the built image as a tarball artifact so a
+          later job can scan it. Without this a build-only run has nothing for
+          the container scanners to fetch, because the image exists only in this
+          job's build cache.
+        type: boolean
+        default: false
+      backup_existing_tag:
+        description: |
+          Before pushing, copy any image already at this tag to <tag>-backup.
+          Only meaningful for mutable tags such as a release candidate that can
+          be rebuilt: it keeps one level of undo, because overwriting the tag
+          otherwise makes the previous image unreachable. Pointless for
+          immutable tags like a commit SHA, so it is off by default.
+        type: boolean
+        default: false
 
     secrets:
       # Secrets for 'generic' mode
@@ -122,6 +147,9 @@ on:
       image_digest:
         description: "SHA256 digest of the pushed image (immutable reference)"
         value: ${{ jobs.build-push.outputs.image_digest }}
+      image_artifact:
+        description: "Name of the uploaded image tarball artifact, empty if none"
+        value: ${{ jobs.build-push.outputs.image_artifact }}
 
   # Allow manual trigger for testing
   workflow_dispatch:
@@ -192,6 +220,13 @@ jobs:
     outputs:
       image_uri: ${{ steps.meta.outputs.image_uri }}
       image_digest: ${{ steps.build.outputs.digest }}
+      image_artifact: ${{ steps.export.outputs.name }}
+
+    # The `secrets` context is not available in a step-level `if:`, but it is
+    # available in job-level `env:`. Resolve the presence check once here so
+    # the login steps can branch on it.
+    env:
+      HAS_REGISTRY_CREDS: ${{ (inputs.registry_username || secrets.registry_username) != '' }}
 
     steps:
       # ----------------------------------------------------------------------
@@ -221,12 +256,14 @@ jobs:
         uses: aws-actions/amazon-ecr-login@03f1aad4c6c7ffd436567f42f9384779290529bd # v2
 
       # MODE B: Generic Registry (Docker Hub, GHCR, etc.)
+      # Skipped on a PR that does not push: forks and PR builds have no
+      # registry credentials, and a login attempt would fail the job.
       - name: Login to Generic Registry
-        if: inputs.registry_type == 'generic'
+        if: inputs.registry_type == 'generic' && (inputs.push == true || env.HAS_REGISTRY_CREDS == 'true')
         uses: docker/login-action@dbcb813823bdd20940b903addbd779551569679f # v4.6.0
         with:
           registry: ${{ inputs.registry_url }}
-          username: ${{ secrets.registry_username }}
+          username: ${{ inputs.registry_username || secrets.registry_username }}
           password: ${{ secrets.registry_password }}
 
       # MODE C: Nexus Docker Registry
@@ -429,6 +466,30 @@ jobs:
             echo "args=" >> $GITHUB_OUTPUT
           fi
 
+      # Runs after login and after the tag is known, but before the push that
+      # would overwrite it.
+      - name: Backup Existing Tag
+        if: inputs.push == true && inputs.backup_existing_tag == true
+        env:
+          IMAGE_URI: ${{ steps.meta.outputs.image_uri }}
+        run: |
+          set -uo pipefail
+          BACKUP="${IMAGE_URI}-backup"
+
+          if ! docker buildx imagetools inspect "$IMAGE_URI" >/dev/null 2>&1; then
+            echo "Nothing at ${IMAGE_URI} yet; no backup needed."
+            exit 0
+          fi
+
+          echo "Backing up ${IMAGE_URI} -> ${BACKUP}"
+          # Manifest-only copy: the registry re-points a tag, no layers move.
+          if docker buildx imagetools create --tag "$BACKUP" "$IMAGE_URI"; then
+            echo "Previous image preserved at ${BACKUP}"
+          else
+            echo "::error::Could not back up ${IMAGE_URI}. Refusing to overwrite it."
+            exit 1
+          fi
+
       - name: Build and Push Docker Image
         id: build
         uses: docker/build-push-action@53b7df96c91f9c12dcc8a07bcb9ccacbed38856a # v7.3.0
@@ -443,6 +504,38 @@ jobs:
           # Note: Set provenance: true, mode: max for SLSA Level 2+ compliance
           cache-from: type=gha
           cache-to: type=gha,mode=max
+          # On a build-only run, also write the image to a tarball so a later
+          # job can scan it. A `docker` output cannot be combined with a
+          # multi-arch build, which is why this is opt-in rather than always on.
+          outputs: ${{ (inputs.push != true && inputs.export_image_artifact == true) && format('type=docker,dest={0}/image.tar', runner.temp) || '' }}
+
+      # ----------------------------------------------------------------------
+      # 5b. EXPORT FOR SCANNING (build-only runs)
+      # Without this, a build-only image exists only in this job's build cache
+      # and the container scanners have nothing to fetch.
+      # ----------------------------------------------------------------------
+      - name: Verify Image Tarball
+        id: export
+        if: inputs.push != true && inputs.export_image_artifact == true
+        env:
+          ARTIFACT: image-${{ github.run_id }}-${{ github.job }}
+        run: |
+          set -euo pipefail
+          if [[ ! -s "${RUNNER_TEMP}/image.tar" ]]; then
+            echo "::error::Expected an image tarball at ${RUNNER_TEMP}/image.tar but found none."
+            exit 1
+          fi
+          ls -lh "${RUNNER_TEMP}/image.tar"
+          echo "name=${ARTIFACT}" >> "$GITHUB_OUTPUT"
+
+      - name: Store Image Tarball
+        if: inputs.push != true && inputs.export_image_artifact == true
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: image-${{ github.run_id }}-${{ github.job }}
+          path: ${{ runner.temp }}/image.tar
+          retention-days: 1
+          if-no-files-found: error
 
       # ----------------------------------------------------------------------
       # 6. OUTPUT SUMMARY
@@ -454,6 +547,7 @@ jobs:
           STEP_META_TAG: ${{ steps.meta.outputs.tag }}
           REGISTRY_TYPE: ${{ inputs.registry_type }}
           PLATFORMS: ${{ inputs.platforms }}
+          PUSHED: ${{ inputs.push }}
         run: |
           echo "# 🐳 Docker Build Complete" >> $GITHUB_STEP_SUMMARY
           echo "" >> $GITHUB_STEP_SUMMARY
@@ -465,4 +559,12 @@ jobs:
           echo "| **Registry** | ${REGISTRY_TYPE} |" >> $GITHUB_STEP_SUMMARY
           echo "| **Platforms** | ${PLATFORMS} |" >> $GITHUB_STEP_SUMMARY
           echo "" >> $GITHUB_STEP_SUMMARY
-          echo "✅ Image pushed successfully to registry" >> $GITHUB_STEP_SUMMARY
+          # Report what actually happened. When push is false the image is only
+          # ever in the build cache, so claiming a push here is simply untrue.
+          if [[ "$PUSHED" == "true" ]]; then
+            echo "✅ Image pushed to registry" >> $GITHUB_STEP_SUMMARY
+          else
+            echo "ℹ️ Build-only run (\`push: false\`) — the image was validated and discarded, not pushed." >> $GITHUB_STEP_SUMMARY
+            echo "" >> $GITHUB_STEP_SUMMARY
+            echo "No registry credentials were used and no image left this runner." >> $GITHUB_STEP_SUMMARY
+          fi

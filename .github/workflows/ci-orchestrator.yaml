@@ -8,6 +8,9 @@ name: "Orchestrator: CI Pipeline"
 # 4. Downloads artifacts from Nexus (if needed)
 # 5. Builds Docker images
 # 6. Sequential Post-Build Security: Trivy → SBOM → SBOM-Scan
+#    Trivy runs on both paths: a pushed image is pulled from the registry, and
+#    a build-only image is loaded from the tarball docker-build exports.
+#    SBOM/SBOM-scan remain push-only -- they describe a published artifact.
 # ------------------------------------------------------------------------------
 
 on:
@@ -25,6 +28,22 @@ on:
         description: "Push images and artifacts to registries?"
         type: boolean
         default: true
+      image_tag:
+        description: |
+          Explicit image tag, overriding both docker.image_tag in the config and
+          the branch-based smart versioning. Use this when the tag is decided at
+          run time -- e.g. a caller triggered by a release tag passing
+          github.ref_name so the image carries the release version.
+        type: string
+        default: ""
+      registry_username:
+        description: |
+          Registry username, passed as an input rather than a secret. A secret is
+          masked, and GitHub drops job outputs containing a masked value, which
+          empties image_uri for the scanners, the summary and the CD hand-off
+          whenever the username also appears in the image name.
+        type: string
+        default: ""
     secrets:
       # Pass through for Docker Hub / Generic Registries
       registry_username:
@@ -49,7 +68,11 @@ on:
 
 # Prevent multiple runs on same ref (with smart cancellation)
 concurrency:
-  group: ci-${{ github.workflow }}-${{ github.ref }}
+  # config_path keeps each component in its own group. github.workflow is the
+  # CALLER's workflow name, so a monorepo release that invokes this orchestrator
+  # once per component would otherwise put every call in one group and have them
+  # cancel each other -- leaving a single component built.
+  group: ci-${{ github.workflow }}-${{ inputs.config_path }}-${{ github.ref }}
   cancel-in-progress: ${{ github.ref != 'refs/heads/main' && github.ref != 'refs/heads/master' }}
   # ^ Only cancel in-progress runs on PR/feature branches, not on main/master
 
@@ -139,18 +162,27 @@ jobs:
           echo "sast_tool=$SAST_TOOL" >> $GITHUB_OUTPUT
           echo "🔍 SAST tool: $SAST_TOOL"
 
-          # Determine expected artifact name based on language
-          if [[ "$LANGUAGE" == "maven" ]]; then
-            ARTIFACT_NAME="maven-build-artifacts-${GH_RUN_ID}"
-          elif [[ "$LANGUAGE" == "node" ]]; then
-            ARTIFACT_NAME="node-build-artifacts-${GH_RUN_ID}"
-          elif [[ "$LANGUAGE" == "python" ]]; then
-            ARTIFACT_NAME="python-build-artifacts-${GH_RUN_ID}"
-          else
+          # Determine the expected artifact name.
+          #
+          # The build modules only upload a GitHub artifact when
+          # build.artifact_path is set -- there is nothing to hand off otherwise.
+          # Naming one unconditionally makes docker-build try to download an
+          # artifact that was never produced, which fails the job. Only name it
+          # when the config actually asks for one.
+          ARTIFACT_PATH=$(yq '.build.artifact_path // ""' "${CONFIG_PATH}")
+          if [[ -z "$ARTIFACT_PATH" || "$ARTIFACT_PATH" == "null" ]]; then
             ARTIFACT_NAME=""
+            echo "📦 No build.artifact_path configured; Docker will build from source."
+          else
+            case "$LANGUAGE" in
+              maven)  ARTIFACT_NAME="maven-build-artifacts-${GH_RUN_ID}" ;;
+              node)   ARTIFACT_NAME="node-build-artifacts-${GH_RUN_ID}" ;;
+              python) ARTIFACT_NAME="python-build-artifacts-${GH_RUN_ID}" ;;
+              *)      ARTIFACT_NAME="" ;;
+            esac
+            echo "📦 Artifact name: $ARTIFACT_NAME"
           fi
           echo "artifact_name=$ARTIFACT_NAME" >> $GITHUB_OUTPUT
-          echo "📦 Artifact name: $ARTIFACT_NAME"
 
   # ---------------------------------------------------------------------------
   # 2. PRE-BUILD SECURITY GATES (Parallel) - MULTI-SAST SUPPORT
@@ -245,6 +277,7 @@ jobs:
     with:
       working_directory: ${{ fromJson(needs.load-config.outputs.config).project.working_directory || '.' }}
       python_version: ${{ fromJson(needs.load-config.outputs.config).project.version || '3.11' }}
+      install_command: ${{ fromJson(needs.load-config.outputs.config).build.install_command || '' }}
       run_tests: ${{ fromJson(needs.load-config.outputs.config).build.run_tests != false }}
       test_script: ${{ fromJson(needs.load-config.outputs.config).build.test_script || 'python -m pytest' }}
       build_command: ${{ fromJson(needs.load-config.outputs.config).build.build_script || '' }}
@@ -308,8 +341,15 @@ jobs:
       working_directory: ${{ fromJson(needs.load-config.outputs.config).docker.working_directory || '.' }}
       dockerfile: ${{ fromJson(needs.load-config.outputs.config).docker.dockerfile || 'Dockerfile' }}
       registry_type: ${{ fromJson(needs.load-config.outputs.config).docker.registry_type || 'ecr' }}
+      registry_username: ${{ inputs.registry_username }}
       image_name: ${{ fromJson(needs.load-config.outputs.config).docker.image_name }}
-      image_tag: ${{ fromJson(needs.load-config.outputs.config).docker.image_tag || '' }}
+      image_tag: ${{ inputs.image_tag || fromJson(needs.load-config.outputs.config).docker.image_tag || '' }}
+      # Opt-in per project: only worth it for mutable tags (a release
+      # candidate that may be rebuilt), never for commit-SHA tags.
+      backup_existing_tag: ${{ fromJson(needs.load-config.outputs.config).docker.backup_existing_tag == true }}
+      # On a build-only run the image never reaches a registry, so export it as
+      # a tarball for the container scanners to load.
+      export_image_artifact: ${{ inputs.push != true && fromJson(needs.load-config.outputs.config).security.trivy.enabled == true }}
       artifact_name: ${{ needs.load-config.outputs.artifact_name }}
       # AWS Context for ECR
       aws_region: ${{ fromJson(needs.load-config.outputs.config).aws.region || 'us-east-1' }}
@@ -334,6 +374,8 @@ jobs:
   # ---------------------------------------------------------------------------
   
   # STEP 1: Container Vulnerability Scan (Fails fast on CRITICAL CVEs)
+      # Runs on both paths: a pushed image is pulled from the registry, and a
+      # build-only image is loaded from the tarball docker-build exported.
   trivy:
     needs: [load-config, docker]
     if: |
@@ -342,14 +384,21 @@ jobs:
       needs.docker.result == 'success'
     uses: AOT-Technologies/devx-reusable-workflows/.github/workflows/trivy-scan.yaml@v1
     secrets:
-      registry_username: ${{ secrets.NEXUS_USERNAME }}
-      registry_password: ${{ secrets.NEXUS_PASSWORD }}
+      # Generic-registry credentials first, Nexus as the fallback: these modules
+      # expose a single credential pair, so it must match whichever registry the
+      # image lives in.
+      registry_username: ${{ secrets.registry_username || secrets.NEXUS_USERNAME }}
+      registry_password: ${{ secrets.registry_password || secrets.NEXUS_PASSWORD }}
     with:
       scan_type: image
       image_uri: ${{ needs.docker.outputs.image_uri }}
+      image_artifact: ${{ needs.docker.outputs.image_artifact }}
       # Registry Authentication
       registry_type: ${{ fromJson(needs.load-config.outputs.config).docker.registry_type || 'ecr' }}
-      registry_url: ${{ fromJson(needs.load-config.outputs.config).nexus.docker_registry_url || '' }}
+      registry_username: ${{ inputs.registry_username }}
+      # Prefer the docker registry the image was actually pushed to; fall back
+      # to the Nexus docker registry for consumers using registry_type: nexus.
+      registry_url: ${{ fromJson(needs.load-config.outputs.config).docker.registry_url || fromJson(needs.load-config.outputs.config).nexus.docker_registry_url || '' }}
       # AWS credentials for ECR access
       aws_region: ${{ fromJson(needs.load-config.outputs.config).aws.region || 'us-east-1' }}
       role_to_assume: ${{ fromJson(needs.load-config.outputs.config).aws.role_to_assume || '' }}
@@ -367,17 +416,24 @@ jobs:
       always() &&
       fromJson(needs.load-config.outputs.config).security.sbom.enabled == true &&
       needs.docker.result == 'success' &&
+      inputs.push == true &&
       (needs.trivy.result == 'success' || needs.trivy.result == 'skipped')
     uses: AOT-Technologies/devx-reusable-workflows/.github/workflows/sbom-generate.yaml@v1
     secrets:
-      registry_username: ${{ secrets.NEXUS_USERNAME }}
-      registry_password: ${{ secrets.NEXUS_PASSWORD }}
+      # Generic-registry credentials first, Nexus as the fallback: these modules
+      # expose a single credential pair, so it must match whichever registry the
+      # image lives in.
+      registry_username: ${{ secrets.registry_username || secrets.NEXUS_USERNAME }}
+      registry_password: ${{ secrets.registry_password || secrets.NEXUS_PASSWORD }}
     with:
       sbom_type: image
       image_uri: ${{ needs.docker.outputs.image_uri }}
       # Registry Authentication
       registry_type: ${{ fromJson(needs.load-config.outputs.config).docker.registry_type || 'ecr' }}
-      registry_url: ${{ fromJson(needs.load-config.outputs.config).nexus.docker_registry_url || '' }}
+      registry_username: ${{ inputs.registry_username }}
+      # Prefer the docker registry the image was actually pushed to; fall back
+      # to the Nexus docker registry for consumers using registry_type: nexus.
+      registry_url: ${{ fromJson(needs.load-config.outputs.config).docker.registry_url || fromJson(needs.load-config.outputs.config).nexus.docker_registry_url || '' }}
       # AWS credentials for ECR access
       aws_region: ${{ fromJson(needs.load-config.outputs.config).aws.region || 'us-east-1' }}
       role_to_assume: ${{ fromJson(needs.load-config.outputs.config).aws.role_to_assume || '' }}

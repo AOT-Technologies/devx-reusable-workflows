@@ -9,6 +9,100 @@ in that major line.
 
 ## [Unreleased]
 
+## [1.2.0]
+
+Everything here was found by running the workflows against a real EKS cluster
+and a real project, not by reading them. Several defects had survived review
+because they only surface under a correctly least-privileged role, a
+namespace-scoped deploy, or a workload that is not a single-container
+Deployment.
+
+### Added
+
+- **`release-tag.yaml`** — cuts an annotated `X.Y.Z<suffix>` tag on a release
+  branch, auto-incrementing the patch from the highest tag already merged into
+  that branch. Callers drive the build from its `tag` output in the same run,
+  because GitHub does not start a workflow from an event created with the
+  default `GITHUB_TOKEN`, so a pushed tag cannot trigger a `push: tags:` build.
+- **`image_tag` input on `ci-orchestrator`** so a caller can publish at an
+  explicit version rather than a commit SHA.
+- **`backup_existing_tag` on `docker-build`** — copies a mutable tag to
+  `<tag>-backup` before overwriting it, using a server-side manifest copy.
+- **`export_image_artifact` on `docker-build`** plus `image_artifact` on
+  `trivy-scan`, so an image that was never pushed can still be scanned. This is
+  what makes container scanning possible on the pull-request path.
+- **`workload_kind` and `additional_workloads`** across `deploy-eks-patch`,
+  `health-check` and `rollback`: StatefulSets and DaemonSets can now be
+  deployed, checked and rolled back, and one image can drive several workloads
+  that all move together.
+- **`previous_images` output on `deploy-eks-patch`**, consumed by `rollback`.
+
+### Fixed
+
+- **The environment name was checked against a hardcoded
+  `(dev|qa|staging|production)` allowlist**, so ordinary names like `demo`,
+  `uat` or `preprod` were rejected outright. Which environments exist is the
+  caller's config to declare, and it is already validated against
+  `deployment.environments`.
+- **`role_to_assume` ignored per-environment overrides.** Environment-scoped
+  roles are the normal way to isolate environments and are typically trusted for
+  a single namespace, so the global role authenticated and was then denied by
+  RBAC. Helm `chart_path`/`release_name` had the same precedence inverted.
+- **`kubectl cluster-info` required cluster-wide read.** It lists services in
+  `kube-system`, which a deploy role scoped to one namespace cannot read, so the
+  connectivity check failed with `Forbidden` on a healthy connection before any
+  deploy ran. Affected every Kubernetes path. Reachability now goes through
+  discovery and access through a SelfSubjectAccessReview on the target
+  namespace, which also reports a missing RBAC binding as such.
+- **Rollback rolled back every deployment in the namespace.** In a shared
+  namespace that reverts other teams' services, databases and brokers along with
+  the intended workload. It now reverts exactly what was deployed and refuses to
+  run rather than guess.
+- **Rollback never fired on a failed deploy** — only on a failed health check,
+  and a disabled health check reports `skipped`, not `failure`, so a caller with
+  health checks off could not roll back at all.
+- **Rollback used Helm for patch deploys** whenever a release name happened to
+  be configured. Helm holds no revision for a change made with `kubectl`, so it
+  reverted to unrelated state. Adds `deployment_method`.
+- **Rollback left a StatefulSet down.** A StatefulSet updates pods one ordinal
+  at a time and will not move past a pod that is not Ready, so a pod wedged in
+  `ImagePullBackOff` stayed wedged: `rollout undo` reported success and
+  `rollout status` then timed out. Stuck pods are now deleted so the restored
+  spec takes effect.
+- **Rollback stepped back a revision instead of undoing the deploy.**
+  `rollout undo` moves back one revision regardless, so after a deploy that
+  changed nothing it reverted a change the run never made. The pre-deploy image
+  is now recorded before anything is touched and restored exactly.
+- **The health check could pass on the wrong workload.** With no target it
+  listed the namespace and took the first deployment, so a check for one
+  component could report healthy on the strength of another. It now requires an
+  explicit target, and receives the deployed workload rather than the Helm
+  release name.
+- **`notifications.enabled: false` and `auto_rollback: false` were ignored.**
+  Both were resolved with a chain of yq `//` operators, and `//` treats an
+  explicit `false` as absent, so each fell back to `true` and could not be
+  turned off.
+- **A masked `registry_username` silently emptied `image_uri`.** GitHub drops
+  any job output containing a secret value, so passing the username as a secret
+  blanked the output whenever it also appeared in the image name. It is now an
+  input.
+- **`install_command` was quoted as a single argument** in `python-build`,
+  executing the whole command string as one program name.
+- **Grype could not read the SBOM** `sbom-generate` produced, and the failure
+  was disguised as a warning. Bumped past the format change, with exit codes
+  interpreted so "vulnerabilities found" is distinguishable from "scan failed".
+- **`trivy` and `sbom` were given the Nexus registry and credentials** even when
+  the image lived in the Docker registry.
+- **`docker-build` reported a successful push on a build-only run.**
+- **A build artifact was requested even when none was produced.**
+- **The concurrency group was not scoped per component**, so parallel releases
+  of different components cancelled each other.
+
+### Changed
+
+- `validate_workflows.py` gained a check that no `${{ }}` appears in any
+  executable body, and is now fork-aware.
+
 ## [1.1.1]
 
 ### Security

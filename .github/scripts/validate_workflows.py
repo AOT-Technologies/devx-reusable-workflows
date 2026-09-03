@@ -36,8 +36,36 @@ import glob
 import yaml
 
 WORKFLOW_DIR = os.path.join('.github', 'workflows')
-SELF_PREFIX = 'AOT-Technologies/devx-reusable-workflows/.github/workflows/'
+# A self-reference is any owner of THIS repository name. Matching on the repo
+# name rather than a hardcoded owner keeps the check correct in a fork, where
+# the orchestrators are repointed at the fork owner while it is being tested.
+SELF_RE = re.compile(r'^[A-Za-z0-9_.-]+/devx-reusable-workflows/\.github/workflows/')
+
+
+def self_callee(uses):
+    """Return the callee filename if `uses` targets a workflow in this repo."""
+    m = SELF_RE.match(uses or '')
+    if not m:
+        return None
+    return uses[m.end():].split('@')[0]
+
+
 SHA_RE = re.compile(r'^[0-9a-f]{40}$')
+_USES_RE = re.compile(r'\buses:\s*(\S+)')
+
+
+def iter_uses(src):
+    """Yield every real `uses:` value, ignoring YAML comments.
+
+    A workflow may document how to call it in a header comment block. Those
+    example `uses:` lines are documentation, not dependencies, and must not be
+    reported as unpinned actions.
+    """
+    for line in src.split('\n'):
+        code = line.split('#', 1)[0]
+        m = _USES_RE.search(code)
+        if m:
+            yield m.group(1)
 EXPR_RE = re.compile(r'\$\{\{(.+?)\}\}', re.S)
 
 # Workflows that are entrypoints for humans/CI rather than reusable modules.
@@ -144,8 +172,8 @@ def main() -> int:
 
             # ---- 3. reusable-workflow call contracts -----------------------
             uses = job.get('uses')
-            if uses and SELF_PREFIX in uses:
-                callee = uses.split(SELF_PREFIX, 1)[1].split('@')[0]
+            callee = self_callee(uses)
+            if callee:
                 spec = specs.get(callee)
                 if spec is None:
                     err(name, f"job '{job_name}' calls unknown workflow '{callee}'")
@@ -180,8 +208,10 @@ def main() -> int:
                               f"does not declare")
 
         # ---- 5. action pinning --------------------------------------------
-        for ref in re.findall(r'uses:\s*(\S+)', src):
-            if ref.startswith(SELF_PREFIX) or ref.startswith('./'):
+        # Only real `uses:` keys -- a commented-out example (usage docs in a
+        # header block) is documentation, not a dependency.
+        for ref in iter_uses(src):
+            if self_callee(ref) or ref.startswith('./'):
                 continue
             if '@' not in ref:
                 err(name, f"action reference '{ref}' has no version")
