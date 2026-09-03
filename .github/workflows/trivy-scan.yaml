@@ -190,8 +190,12 @@ jobs:
       # REGISTRY AUTHENTICATION
       # ------------------------------------------------------------------------
       # Option A: AWS ECR (OIDC)
+      # A tarball scan needs no registry at all -- the image is loaded from an
+      # artifact. Authenticating anyway made the pull-request path demand
+      # credentials it never uses, which fails outright wherever they are
+      # absent, such as a pull request from a fork.
       - name: Configure AWS Credentials (ECR)
-        if: inputs.registry_type == 'ecr' && inputs.role_to_assume != ''
+        if: inputs.image_artifact == '' && inputs.registry_type == 'ecr' && inputs.role_to_assume != ''
         uses: aws-actions/configure-aws-credentials@e6de054238d6b7531b4efff3b6587d9aade6a06c # v6.2.3
         with:
           role-to-assume: ${{ inputs.role_to_assume }}
@@ -199,14 +203,14 @@ jobs:
           role-session-name: trivy-scan-session
 
       - name: Login to Amazon ECR
-        if: inputs.registry_type == 'ecr' && inputs.role_to_assume != ''
+        if: inputs.image_artifact == '' && inputs.registry_type == 'ecr' && inputs.role_to_assume != ''
         uses: aws-actions/amazon-ecr-login@03f1aad4c6c7ffd436567f42f9384779290529bd # v2
         with:
           mask-password: true
 
       # Option B: Generic / Nexus
       - name: Login to Registry (Generic/Nexus)
-        if: (inputs.registry_type == 'generic' || inputs.registry_type == 'nexus') && inputs.registry_url != ''
+        if: inputs.image_artifact == '' && (inputs.registry_type == 'generic' || inputs.registry_type == 'nexus') && inputs.registry_url != ''
         uses: docker/login-action@dbcb813823bdd20940b903addbd779551569679f # v4.6.0
         with:
           registry: ${{ inputs.registry_url }}
@@ -280,6 +284,11 @@ jobs:
       - name: Upload Results to Security Tab
         uses: github/codeql-action/upload-sarif@cdf488f595d80d6e07e03d4674febd5ab45fa938 # v4
         if: always() && inputs.output_format == 'sarif'
+        # Uploading SARIF needs security-events: write, and a pull_request run
+        # from a fork gets a read-only token whatever the caller grants. Losing
+        # the Security tab report must not fail the gate -- the scan itself has
+        # already passed or failed on its own merits by this point.
+        continue-on-error: true
         with:
           sarif_file: 'trivy-${{ inputs.scan_type }}-results.sarif'
           category: 'trivy-${{ inputs.scan_type }}'

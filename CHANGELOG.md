@@ -9,6 +9,24 @@ in that major line.
 
 ## [Unreleased]
 
+## [1.2.3]
+
+### Fixed
+
+- **A tarball image scan no longer requires registry credentials.** When
+  `image_artifact` is set the image is loaded from an artifact, so no registry
+  is contacted -- yet `trivy-scan` still authenticated first. That made the
+  pull-request path depend on credentials it never uses, and fail with
+  "Username and password required" wherever they are absent, such as a pull
+  request from a fork. The ECR and generic logins are now skipped for a
+  tarball scan. This was a defect in the pull-request scanning added in 1.2.0.
+
+- **Losing the Security tab upload no longer fails a scan.** Uploading SARIF
+  needs `security-events: write`, which a `pull_request` run from a fork does
+  not get regardless of what the caller grants. Both `trivy-scan` and
+  `sbom-scan` now treat the upload as non-fatal; by that point the scan has
+  already reached its own verdict, and the report is a convenience.
+
 ## [1.2.2]
 
 ### Fixed
