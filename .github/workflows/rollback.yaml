@@ -30,6 +30,36 @@ on:
         description: "Helm release name"
         type: string
         default: ""
+      deployment_method:
+        description: |
+          How the deploy was performed: 'helm' or 'patch'. A patch deploy is
+          made with kubectl outside Helm, so Helm has no revision recording it
+          and 'helm rollback' would revert to the wrong state -- even when a
+          release name is configured.
+        type: string
+        default: "helm"
+      workload_kind:
+        description: "Workload kind for a patch rollback: deployment, statefulset or daemonset"
+        type: string
+        default: "deployment"
+      deployment_name:
+        description: "Primary workload to roll back (patch deploys)"
+        type: string
+        default: ""
+      additional_workloads:
+        description: "Extra workloads that were deployed together, as a compact JSON array"
+        type: string
+        default: "[]"
+      previous_images:
+        description: |
+          What each workload ran before the deploy, as a JSON object keyed by
+          "kind/name" with {container, image} values -- normally the deploy
+          module's previous_images output. When given, rollback restores these
+          exact images. That is not the same as `rollout undo`: undo steps back
+          one revision regardless, so after a deploy that changed nothing it
+          reverts a change this run never made. Falls back to undo when empty.
+        type: string
+        default: "{}"
       revision:
         description: "Specific revision to rollback to (0 = previous)"
         type: string
@@ -132,18 +162,34 @@ jobs:
       - name: Setup kubectl
         if: inputs.deployment_target == 'eks' && inputs.cluster_name != ''
         env:
+          NAMESPACE: ${{ inputs.namespace }}
           CLUSTER_NAME: ${{ inputs.cluster_name }}
           AWS_REGION: ${{ inputs.aws_region }}
         run: |
           aws eks update-kubeconfig --name "${CLUSTER_NAME}" --region "${AWS_REGION}"
-          kubectl cluster-info
+          # 'kubectl cluster-info' lists services in kube-system, which a deploy
+          # role scoped to a single namespace -- the recommended setup -- cannot
+          # read, so it fails with Forbidden on a perfectly good connection.
+          # Discovery and SelfSubjectAccessReview are available to any
+          # authenticated principal, so check reachability and access that way.
+          kubectl version --request-timeout=20s >/dev/null || {
+            echo "::error::Cannot reach the Kubernetes API"
+            exit 1
+          }
+          if [[ -n "${NAMESPACE:-}" ]]; then
+            kubectl auth can-i get deployments -n "${NAMESPACE}" >/dev/null || {
+              echo "::error::Reached the cluster but have no access in namespace '${NAMESPACE}'"
+              echo "::error::Check the EKS access entry / RBAC binding for this role."
+              exit 1
+            }
+          fi
 
       # -------------------------------------------------------------------------
       # EKS/HELM ROLLBACK
       # -------------------------------------------------------------------------
       - name: Helm Rollback
         id: rollback
-        if: inputs.deployment_target == 'eks' && inputs.helm_release_name != ''
+        if: inputs.deployment_target == 'eks' && inputs.deployment_method != 'patch' && inputs.helm_release_name != ''
         env:
           HELM_RELEASE_NAME: ${{ inputs.helm_release_name }}
           NAMESPACE: ${{ inputs.namespace }}
@@ -186,29 +232,103 @@ jobs:
       # KUBERNETES NATIVE ROLLBACK (if no Helm)
       # -------------------------------------------------------------------------
       - name: Kubernetes Rollback
-        if: inputs.deployment_target == 'eks' && inputs.helm_release_name == ''
+        if: inputs.deployment_target == 'eks' && (inputs.deployment_method == 'patch' || inputs.helm_release_name == '')
         env:
           NAMESPACE: ${{ inputs.namespace }}
+          WORKLOAD_KIND: ${{ inputs.workload_kind }}
+          DEPLOYMENT_NAME: ${{ inputs.deployment_name }}
+          ADDITIONAL_WORKLOADS: ${{ inputs.additional_workloads }}
+          PREVIOUS_IMAGES: ${{ inputs.previous_images }}
         run: |
-          echo "Rolling back Kubernetes deployment"
-          
-          
-          # Get deployments in namespace
-          DEPLOYMENTS=$(kubectl get deployments -n "$NAMESPACE" -o jsonpath='{.items[*].metadata.name}')
-          
-          for DEPLOY in $DEPLOYMENTS; do
-            echo "Rolling back deployment: $DEPLOY"
-            kubectl rollout undo deployment/"$DEPLOY" -n "$NAMESPACE" || {
-              echo "::warning::Failed to rollback $DEPLOY"
-            }
+          set -euo pipefail
+
+          # Roll back only what this deployment touched. Enumerating the
+          # namespace would revert unrelated workloads -- a shared namespace
+          # commonly holds databases, brokers and other teams' services.
+          if [[ -z "${DEPLOYMENT_NAME}" ]]; then
+            echo "::error::deployment_name is required to roll back a patch deploy."
+            echo "::error::Refusing to guess which workloads to revert."
+            exit 1
+          fi
+
+          EXTRA="${ADDITIONAL_WORKLOADS:-[]}"
+          if ! printf '%s' "$EXTRA" | jq -e 'type == "array"' >/dev/null 2>&1; then
+            echo "::error::additional_workloads must be a JSON array; got: ${EXTRA}"
+            exit 1
+          fi
+
+          SPECS=("${WORKLOAD_KIND}|${DEPLOYMENT_NAME}")
+          while IFS= read -r spec; do
+            [[ -n "$spec" ]] && SPECS+=("$spec")
+          done < <(printf '%s' "$EXTRA" | jq -r --arg k "${WORKLOAD_KIND}" '
+            .[] | "\(.kind // $k)|\(.name // "")"')
+
+          PREV_IMAGES="${PREVIOUS_IMAGES:-}"
+          if [[ -z "$PREV_IMAGES" ]]; then
+            PREV_IMAGES='{}'
+          fi
+          if ! printf '%s' "$PREV_IMAGES" | jq -e 'type == "object"' >/dev/null 2>&1; then
+            echo "::warning::previous_images is not a JSON object; falling back to rollout undo."
+            PREV_IMAGES='{}'
+          fi
+
+          FAILED=0
+          for spec in "${SPECS[@]}"; do
+            IFS='|' read -r KIND NAME <<< "$spec"
+            case "$KIND" in
+              deployment|statefulset|daemonset) ;;
+              *) echo "::error::Unsupported kind '${KIND}'."; exit 1 ;;
+            esac
+            [[ -z "$NAME" ]] && { echo "::error::Workload name missing in '${spec}'."; exit 1; }
+
+            # Prefer restoring the recorded pre-deploy image over `rollout undo`.
+            PREV_ENTRY=$(printf '%s' "$PREV_IMAGES" | jq -r --arg k "${KIND}/${NAME}" '.[$k] // empty' 2>/dev/null || true)
+            REVERTED=0
+            if [[ -n "$PREV_ENTRY" ]]; then
+              PC=$(printf '%s' "$PREV_ENTRY" | jq -r '.container')
+              PI=$(printf '%s' "$PREV_ENTRY" | jq -r '.image')
+              echo "::group::restore ${KIND}/${NAME} -> ${PI}"
+              if kubectl set image "${KIND}/${NAME}" "${PC}=${PI}" -n "${NAMESPACE}"; then
+                REVERTED=1
+              else
+                echo "::warning::Could not restore ${KIND}/${NAME} to ${PI}"
+              fi
+            else
+              echo "::group::rollout undo ${KIND}/${NAME}"
+              echo "No recorded pre-deploy image; stepping back one revision instead."
+              if kubectl rollout undo "${KIND}/${NAME}" -n "${NAMESPACE}"; then
+                REVERTED=1
+              fi
+            fi
+
+            if [[ "$REVERTED" -eq 1 ]]; then
+              # A StatefulSet or DaemonSet updates pods one at a time and will
+              # not move past a pod that never became Ready, so reverting the
+              # spec leaves the broken pod -- and the rollout -- stuck. The pod
+              # has to be deleted for the reverted spec to take effect. A
+              # Deployment recovers on its own via a new ReplicaSet, but the
+              # same sweep is harmless there.
+              SEL=$(kubectl get "${KIND}" "${NAME}" -n "${NAMESPACE}" -o go-template='{{range $k,$v := .spec.selector.matchLabels}}{{$k}}={{$v}},{{end}}' 2>/dev/null | sed 's/,$//')
+              if [[ -n "$SEL" ]]; then
+                STUCK=$(kubectl get pods -n "${NAMESPACE}" -l "$SEL" -o json 2>/dev/null | jq -r '.items[] | select(any(.status.containerStatuses[]?; .state.waiting.reason == "ImagePullBackOff" or .state.waiting.reason == "ErrImagePull" or .state.waiting.reason == "CrashLoopBackOff" or .state.waiting.reason == "InvalidImageName")) | .metadata.name' 2>/dev/null)
+                for POD in $STUCK; do
+                  echo "Deleting stuck pod ${POD} so the reverted spec can take effect"
+                  kubectl delete pod "${POD}" -n "${NAMESPACE}" --wait=false || true
+                done
+              fi
+              kubectl rollout status "${KIND}/${NAME}" -n "${NAMESPACE}" --timeout=5m || FAILED=1
+            else
+              echo "::warning::Could not roll back ${KIND}/${NAME}"
+              FAILED=1
+            fi
+            echo "::endgroup::"
           done
-          
-          # Wait for rollout
-          for DEPLOY in $DEPLOYMENTS; do
-            kubectl rollout status deployment/"$DEPLOY" -n "$NAMESPACE" --timeout=5m || true
-          done
-          
-          echo "Kubernetes rollback completed"
+
+          if [[ "$FAILED" -ne 0 ]]; then
+            echo "::error::At least one workload did not roll back cleanly; check it by hand."
+            exit 1
+          fi
+          echo "Rolled back ${#SPECS[@]} workload(s) in ${NAMESPACE}"
 
       # -------------------------------------------------------------------------
       # EC2 ROLLBACK
