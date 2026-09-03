@@ -233,6 +233,10 @@ jobs:
       # an empty file fails with "Invalid SARIF", which obscures the real cause.
       - name: Upload SARIF to Security Tab
         if: always() && inputs.upload_sarif == true && inputs.output_format == 'sarif' && steps.grype.outputs.report_valid == 'true'
+        # security-events: write is unavailable to a pull_request run from a
+        # fork whatever the caller grants, so losing the Security tab report
+        # must not fail the scan, which has already reached its own verdict.
+        continue-on-error: true
         uses: github/codeql-action/upload-sarif@cdf488f595d80d6e07e03d4674febd5ab45fa938 # v4
         with:
           sarif_file: grype-results.sarif
