@@ -380,7 +380,12 @@ jobs:
           fi
 
       - name: Comment PR (if pull request)
-        if: github.event_name == 'pull_request'
+        # Nothing to report when the scan was skipped. And a pull_request run
+        # from a fork gets a read-only GITHUB_TOKEN no matter what the caller
+        # grants, so this POST returns 403 there -- losing a cosmetic comment
+        # must never fail a security scan.
+        if: steps.token.outputs.has_token == 'true' && github.event_name == 'pull_request'
+        continue-on-error: true
         uses: actions/github-script@3a2844b7e9c422d3c10d287c895573f7108da1b3 # v9.0.0
         # Values reach the script through env, never through ${{ }}. A GitHub
         # expression is spliced into the script text before Node parses it, so a

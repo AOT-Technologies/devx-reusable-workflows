@@ -9,6 +9,22 @@ in that major line.
 
 ## [Unreleased]
 
+## [1.2.2]
+
+### Fixed
+
+- **The SonarQube PR comment no longer fails the scan on a fork pull request.**
+  For a `pull_request` run originating in a fork, GitHub issues a read-only
+  `GITHUB_TOKEN` regardless of what the caller grants, so posting the results
+  comment returns `403 Resource not accessible by integration`. Losing a
+  cosmetic comment was failing the whole security scan. The step is now
+  `continue-on-error` and is skipped entirely when the analysis itself was
+  skipped, since there is nothing to report.
+
+  This is the same class of fork restriction as v1.2.1's missing-token fix, in
+  a different mechanism: that one was about secrets, this one is about the
+  token's own permissions.
+
 ## [1.2.1]
 
 ### Fixed
