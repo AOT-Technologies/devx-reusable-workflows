@@ -102,6 +102,10 @@ on:
         description: "Target platforms (e.g., 'linux/amd64,linux/arm64'). Defaults to linux/amd64."
         type: string
         default: "linux/amd64"
+      target:
+        description: "Dockerfile stage to build (optional). Empty builds the last stage."
+        type: string
+        default: ""
       push:
         description: "Push the image to the registry?"
         type: boolean
@@ -206,6 +210,10 @@ on:
         description: "Target platforms"
         type: string
         default: "linux/amd64"
+      target:
+        description: "Dockerfile stage to build (optional). Empty builds the last stage."
+        type: string
+        default: ""
 
 permissions:
   contents: read
@@ -243,15 +251,19 @@ jobs:
       # ----------------------------------------------------------------------
       
       # MODE A: AWS ECR (OIDC - No Keys)
+      # Only when pushing, as with the generic login below. A fork pull
+      # request gets no OIDC token, so assuming the role there fails the job
+      # before anything is built -- and a build that does not push has no use
+      # for registry credentials anyway.
       - name: Configure AWS Credentials (OIDC)
-        if: inputs.registry_type == 'ecr'
+        if: inputs.registry_type == 'ecr' && inputs.push == true
         uses: aws-actions/configure-aws-credentials@e6de054238d6b7531b4efff3b6587d9aade6a06c # v6.2.3
         with:
           role-to-assume: ${{ inputs.role_to_assume }}
           aws-region: ${{ inputs.aws_region }}
 
       - name: Login to Amazon ECR
-        if: inputs.registry_type == 'ecr'
+        if: inputs.registry_type == 'ecr' && inputs.push == true
         id: login-ecr
         uses: aws-actions/amazon-ecr-login@03f1aad4c6c7ffd436567f42f9384779290529bd # v2
 
@@ -416,9 +428,16 @@ jobs:
             fi
           
           elif [[ "$REGISTRY_TYPE" == "ecr" ]]; then
-            # AWS ECR
-            REGISTRY="$ECR_REGISTRY"
-            FULL_URI="${REGISTRY}/${IMAGE_NAME}:${TAG}"
+            # AWS ECR. Without a login (a build that does not push) there is
+            # no registry output, so name the image after the configured
+            # registry_url, or leave it unqualified: it only ever becomes a
+            # local tarball for the scanners.
+            REGISTRY="${ECR_REGISTRY:-$GENERIC_REGISTRY}"
+            if [[ -n "$REGISTRY" ]]; then
+              FULL_URI="${REGISTRY}/${IMAGE_NAME}:${TAG}"
+            else
+              FULL_URI="${IMAGE_NAME}:${TAG}"
+            fi
           
           else
             # Generic (Docker Hub, GHCR, etc.)
@@ -458,10 +477,20 @@ jobs:
           fi
           
           if [[ -n "$COMBINED_ARGS" ]]; then
-            # Convert multiline string to comma-separated for build-push-action
-            ARGS=$(echo "$COMBINED_ARGS" | tr '\n' ',' | sed 's/,$//')
-            echo "args=$ARGS" >> $GITHUB_OUTPUT
-            echo "📋 Combined Build Args: $ARGS"
+            # build-push-action takes build-args one per line and does NOT
+            # split on commas, so keep the newlines (as a multiline output)
+            # and drop blank lines. Joining them with commas merged every arg
+            # into the first one, and a YAML block scalar's trailing newline
+            # left a trailing comma in its value (VITE_BACKEND_BASE_URL=/api,).
+            ARGS=$(printf '%s\n' "$COMBINED_ARGS" | sed '/^[[:space:]]*$/d')
+            DELIM="EOF_BUILD_ARGS_$(date +%s%N)"
+            {
+              echo "args<<${DELIM}"
+              printf '%s\n' "$ARGS"
+              echo "${DELIM}"
+            } >> "$GITHUB_OUTPUT"
+            echo "📋 Build args:"
+            printf '  %s\n' "$ARGS"
           else
             echo "args=" >> $GITHUB_OUTPUT
           fi
@@ -497,6 +526,7 @@ jobs:
           context: ${{ inputs.working_directory }}
           file: ${{ inputs.working_directory }}/${{ inputs.dockerfile }}
           platforms: ${{ inputs.platforms }}
+          target: ${{ inputs.target }}
           push: ${{ inputs.push }}
           tags: ${{ steps.meta.outputs.image_uri }}
           build-args: ${{ steps.parse-build-args.outputs.args }}
