@@ -9,6 +9,8 @@ in that major line.
 
 ## [Unreleased]
 
+## [1.3.0]
+
 ### Added
 
 - **Readable security findings, per component.** A new composite action,
