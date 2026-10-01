@@ -50,6 +50,12 @@ def self_callee(uses):
     return uses[m.end():].split('@')[0]
 
 
+# This repository's own composite actions (.github/actions/...) are versioned
+# with the workflows that call them, exactly like a self-referenced workflow,
+# so they take the same @vX ref rather than a SHA.
+SELF_ACTION_RE = re.compile(r'^[A-Za-z0-9_.-]+/devx-reusable-workflows/\.github/actions/')
+
+
 SHA_RE = re.compile(r'^[0-9a-f]{40}$')
 _USES_RE = re.compile(r'\buses:\s*(\S+)')
 
@@ -211,7 +217,7 @@ def main() -> int:
         # Only real `uses:` keys -- a commented-out example (usage docs in a
         # header block) is documentation, not a dependency.
         for ref in iter_uses(src):
-            if self_callee(ref) or ref.startswith('./'):
+            if self_callee(ref) or SELF_ACTION_RE.match(ref) or ref.startswith('./'):
                 continue
             if '@' not in ref:
                 err(name, f"action reference '{ref}' has no version")

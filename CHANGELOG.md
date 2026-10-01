@@ -9,6 +9,68 @@ in that major line.
 
 ## [Unreleased]
 
+## [1.3.0]
+
+### Added
+
+- **Readable security findings, per component.** A new composite action,
+  `.github/actions/scan-findings`, counts a SARIF report by severity (the
+  scanner's own label first, then the CVSS score, then the SARIF level),
+  writes a critical/high/medium/low table and the top critical and high
+  findings to the run summary, returns the counts as outputs and gates on the
+  severities in `fail_on`. `trivy-scan`, `sast-semgrep` and `sbom-scan` use it
+  and expose `critical`, `high`, `medium`, `low` and `gate` outputs. Code
+  scanning lists alerts for the default branch only, so the run summary is now
+  where findings can actually be read.
+- **A configurable security gate.** `security.gate.fail_on` in the CI config
+  (`critical,high`, ...; `none` reports only) applies to every scanner. Empty
+  keeps each scanner's previous gate.
+- **`component` input** on `trivy-scan`, `sast-semgrep`, `sbom-generate` and
+  `sbom-scan`, so each component gets its own code-scanning category and
+  report artifacts.
+- **CI notifications.** With `notifications.enabled: true` in the CI config,
+  the CI orchestrator sends one Google Chat card per run: passed, passed with
+  findings, or failed (naming the failed stages), the image and whether it was
+  published, and each scanner's counts. Off by default.
+- **Semgrep rulesets from the config.** `security.sast.ruleset` is now passed
+  through (default still `p/ci`) and may list several, comma-separated.
+- **`docker.target`** chooses the Dockerfile stage to build.
+- **SBOM on every build.** `sbom-generate` can read docker-build's image
+  tarball (`image_artifact`), so the SBOM and its scan run on build-only runs
+  too, not only when an image is pushed.
+
+### Changed
+
+- **Notifications fail loudly.** A missing `GOOGLE_CHAT_WEBHOOK`, or a send
+  Google Chat rejects, now fails the notify job instead of being skipped or
+  logged as a warning. The one exception is a `pull_request` from a fork,
+  which GitHub gives no secrets: it warns and carries on, and the push after
+  the merge notifies. The notify module also takes `title`, `component`,
+  `details` and a `message` that is actually shown on the card.
+- **Deploy notifications say what happened:** target, deploy, health-check and
+  rollback results, the image that ran before, and a sentence on rollback.
+- **Scanners report every severity.** Trivy and Semgrep scan all severities
+  and no longer fail the job themselves; the gate decides. Semgrep runs once
+  (it ran twice, the second time for the log).
+- **Health-check logs** show a 200-character preview of the response instead
+  of the whole body.
+
+### Fixed
+
+- **The SBOM scan could scan another component's SBOM.** Every component
+  uploaded `sbom-<sha>`, so a multi-component build scanned whichever SBOM was
+  uploaded last. Artifacts are now `sbom-<component>-<sha>`.
+- **Components overwrote each other's code-scanning results.** All of them
+  used one category, so each upload marked the previous one fixed.
+- **Build args were comma-joined.** `build-push-action` reads one per line and
+  does not split on commas, so every argument after the first was merged into
+  it, and a YAML block scalar's trailing newline left a trailing comma
+  (`/api,`). They are now passed one per line.
+- **ECR login on a build that does not push.** It failed every fork pull
+  request at the credentials step; it is now skipped unless pushing.
+- **The validator** treats this repository's own composite actions like its
+  own workflows (versioned with the repo, `@vX`).
+
 ## [1.2.3]
 
 ### Fixed
