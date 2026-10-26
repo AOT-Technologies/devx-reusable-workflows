@@ -155,7 +155,7 @@ jobs:
       # ------------------------------------------------------------------------
       - name: Download SBOM Artifact
         if: inputs.sbom_artifact_name != ''
-        uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
+        uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
         with:
           name: ${{ inputs.sbom_artifact_name }}
           path: .
@@ -273,14 +273,14 @@ jobs:
         # fork whatever the caller grants, so losing the Security tab report
         # must not fail the scan, which has already reached its own verdict.
         continue-on-error: true
-        uses: github/codeql-action/upload-sarif@cdf488f595d80d6e07e03d4674febd5ab45fa938 # v4
+        uses: github/codeql-action/upload-sarif@9b3254085494b55a0f7c4c2b3d2d52cc712ce370 # v4
         with:
           sarif_file: grype-results.sarif
           category: sbom-grype${{ steps.names.outputs.suffix }}
 
       - name: Upload Scan Report Artifact
         if: inputs.upload_artifact == true && always()
-        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
         with:
           name: sbom-scan-report${{ steps.names.outputs.suffix }}-${{ github.sha }}
           path: grype-results.*

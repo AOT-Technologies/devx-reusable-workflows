@@ -242,7 +242,7 @@ jobs:
       # absent, such as a pull request from a fork.
       - name: Configure AWS Credentials (ECR)
         if: inputs.image_artifact == '' && inputs.registry_type == 'ecr' && inputs.role_to_assume != ''
-        uses: aws-actions/configure-aws-credentials@e6de054238d6b7531b4efff3b6587d9aade6a06c # v6.2.3
+        uses: aws-actions/configure-aws-credentials@e1253824e5c10ff9df46874f81ed3ec929e19cfd # v6.3.0
         with:
           role-to-assume: ${{ inputs.role_to_assume }}
           aws-region: ${{ inputs.aws_region }}
@@ -259,7 +259,7 @@ jobs:
       # GitHub OIDC token for a Docker token that lives a few minutes.
       - name: Login to Docker Hub (OIDC)
         if: inputs.image_artifact == '' && inputs.registry_type == 'generic' && inputs.registry_oidc_connection_id != ''
-        uses: docker/login-action@dbcb813823bdd20940b903addbd779551569679f # v4.6.0
+        uses: docker/login-action@81c6f93d4bc991e510b342a00b419b3bb4efc5c6 # v4.7.0
         env:
           DOCKERHUB_OIDC_CONNECTIONID: ${{ inputs.registry_oidc_connection_id }}
         with:
@@ -267,7 +267,7 @@ jobs:
 
       - name: Login to Registry (Generic/Nexus)
         if: inputs.image_artifact == '' && inputs.registry_oidc_connection_id == '' && (inputs.registry_type == 'generic' || inputs.registry_type == 'nexus') && inputs.registry_url != ''
-        uses: docker/login-action@dbcb813823bdd20940b903addbd779551569679f # v4.6.0
+        uses: docker/login-action@81c6f93d4bc991e510b342a00b419b3bb4efc5c6 # v4.7.0
         with:
           registry: ${{ inputs.registry_url }}
           username: ${{ inputs.registry_username || secrets.registry_username }}
@@ -277,7 +277,7 @@ jobs:
       # docker-build. Loading it is the only way to scan on the PR path.
       - name: Download Image Tarball
         if: inputs.scan_type == 'image' && inputs.image_artifact != ''
-        uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
+        uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
         with:
           name: ${{ inputs.image_artifact }}
           path: ${{ runner.temp }}
@@ -362,7 +362,7 @@ jobs:
       # REPORTING (SARIF UPLOAD)
       # ------------------------------------------------------------------------
       - name: Upload Results to Security Tab
-        uses: github/codeql-action/upload-sarif@cdf488f595d80d6e07e03d4674febd5ab45fa938 # v4
+        uses: github/codeql-action/upload-sarif@9b3254085494b55a0f7c4c2b3d2d52cc712ce370 # v4
         if: always() && inputs.output_format == 'sarif'
         # Uploading SARIF needs security-events: write, and a pull_request run
         # from a fork gets a read-only token whatever the caller grants. Losing
@@ -379,7 +379,7 @@ jobs:
       - name: Upload Report
         if: always()
         continue-on-error: true
-        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
         with:
           name: trivy-${{ inputs.scan_type }}${{ steps.gate.outputs.suffix }}-${{ github.sha }}
           path: trivy-${{ inputs.scan_type }}-results.sarif
