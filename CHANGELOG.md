@@ -9,6 +9,21 @@ in that major line.
 
 ## [Unreleased]
 
+## [1.4.0]
+
+### Added
+
+- **Docker Hub OIDC login.** `docker.oidc_connection_id` in the CI config (or
+  the `registry_oidc_connection_id` input on `docker-build`, `trivy-scan` and
+  `sbom-generate`) logs in to Docker Hub by exchanging the workflow's GitHub
+  OIDC token for a Docker token that lives minutes, so no Docker password or
+  access token is stored. `registry_username` is then the Docker
+  organization. `docker-build` uses it only when it pushes, so pull-request
+  builds never ask for a token the connection's rules would refuse. Without
+  the setting nothing changes.
+- **`docker.registry_username` in the CI config,** so the generic-registry
+  user can be plain config instead of a masked secret.
+
 ## [1.3.0]
 
 ### Added
@@ -403,7 +418,13 @@ upload, Docker build and push, deployment modules for EKS, ECS, EC2 and generic
 Kubernetes, security scanning (Semgrep, SonarQube, Trivy, Checkov, Syft, Grype),
 health checks, rollback and Google Chat notifications.
 
-[Unreleased]: https://github.com/AOT-Technologies/devx-reusable-workflows/compare/v1.1.1...HEAD
+[Unreleased]: https://github.com/AOT-Technologies/devx-reusable-workflows/compare/v1.4.0...HEAD
+[1.4.0]: https://github.com/AOT-Technologies/devx-reusable-workflows/compare/v1.3.0...v1.4.0
+[1.3.0]: https://github.com/AOT-Technologies/devx-reusable-workflows/compare/v1.2.3...v1.3.0
+[1.2.3]: https://github.com/AOT-Technologies/devx-reusable-workflows/compare/v1.2.2...v1.2.3
+[1.2.2]: https://github.com/AOT-Technologies/devx-reusable-workflows/compare/v1.2.1...v1.2.2
+[1.2.1]: https://github.com/AOT-Technologies/devx-reusable-workflows/compare/v1.2.0...v1.2.1
+[1.2.0]: https://github.com/AOT-Technologies/devx-reusable-workflows/compare/v1.1.1...v1.2.0
 [1.1.1]: https://github.com/AOT-Technologies/devx-reusable-workflows/compare/v1.1.0...v1.1.1
 [1.1.0]: https://github.com/AOT-Technologies/devx-reusable-workflows/compare/v1.0.0...v1.1.0
 [1.0.0]: https://github.com/AOT-Technologies/devx-reusable-workflows/releases/tag/v1.0.0

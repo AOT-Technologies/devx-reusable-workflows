@@ -374,7 +374,8 @@ jobs:
       working_directory: ${{ fromJson(needs.load-config.outputs.config).docker.working_directory || '.' }}
       dockerfile: ${{ fromJson(needs.load-config.outputs.config).docker.dockerfile || 'Dockerfile' }}
       registry_type: ${{ fromJson(needs.load-config.outputs.config).docker.registry_type || 'ecr' }}
-      registry_username: ${{ inputs.registry_username }}
+      registry_username: ${{ inputs.registry_username || fromJson(needs.load-config.outputs.config).docker.registry_username || '' }}
+      registry_oidc_connection_id: ${{ fromJson(needs.load-config.outputs.config).docker.oidc_connection_id || '' }}
       image_name: ${{ fromJson(needs.load-config.outputs.config).docker.image_name }}
       image_tag: ${{ inputs.image_tag || fromJson(needs.load-config.outputs.config).docker.image_tag || '' }}
       # Opt-in per project: only worth it for mutable tags (a release
@@ -430,7 +431,8 @@ jobs:
       image_artifact: ${{ needs.docker.outputs.image_artifact }}
       # Registry Authentication
       registry_type: ${{ fromJson(needs.load-config.outputs.config).docker.registry_type || 'ecr' }}
-      registry_username: ${{ inputs.registry_username }}
+      registry_username: ${{ inputs.registry_username || fromJson(needs.load-config.outputs.config).docker.registry_username || '' }}
+      registry_oidc_connection_id: ${{ fromJson(needs.load-config.outputs.config).docker.oidc_connection_id || '' }}
       # Prefer the docker registry the image was actually pushed to; fall back
       # to the Nexus docker registry for consumers using registry_type: nexus.
       registry_url: ${{ fromJson(needs.load-config.outputs.config).docker.registry_url || fromJson(needs.load-config.outputs.config).nexus.docker_registry_url || '' }}
@@ -467,7 +469,8 @@ jobs:
       image_uri: ${{ needs.docker.outputs.image_uri }}
       # Registry Authentication
       registry_type: ${{ fromJson(needs.load-config.outputs.config).docker.registry_type || 'ecr' }}
-      registry_username: ${{ inputs.registry_username }}
+      registry_username: ${{ inputs.registry_username || fromJson(needs.load-config.outputs.config).docker.registry_username || '' }}
+      registry_oidc_connection_id: ${{ fromJson(needs.load-config.outputs.config).docker.oidc_connection_id || '' }}
       # Prefer the docker registry the image was actually pushed to; fall back
       # to the Nexus docker registry for consumers using registry_type: nexus.
       registry_url: ${{ fromJson(needs.load-config.outputs.config).docker.registry_url || fromJson(needs.load-config.outputs.config).nexus.docker_registry_url || '' }}
