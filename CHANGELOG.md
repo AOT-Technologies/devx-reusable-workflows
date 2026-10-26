@@ -9,6 +9,19 @@ in that major line.
 
 ## [Unreleased]
 
+### Added
+
+- **Docker Hub OIDC login.** `docker.oidc_connection_id` in the CI config (or
+  the `registry_oidc_connection_id` input on `docker-build`, `trivy-scan` and
+  `sbom-generate`) logs in to Docker Hub by exchanging the workflow's GitHub
+  OIDC token for a Docker token that lives minutes, so no Docker password or
+  access token is stored. `registry_username` is then the Docker
+  organization. `docker-build` uses it only when it pushes, so pull-request
+  builds never ask for a token the connection's rules would refuse. Without
+  the setting nothing changes.
+- **`docker.registry_username` in the CI config,** so the generic-registry
+  user can be plain config instead of a masked secret.
+
 ## [1.3.0]
 
 ### Added

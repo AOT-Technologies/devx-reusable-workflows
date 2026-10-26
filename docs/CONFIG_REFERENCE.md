@@ -118,6 +118,8 @@ docker:
   image_tag: ""               # Optional: defaults to git SHA
   registry_type: ecr          # ecr | generic | nexus
   registry_url: ""            # Required for generic
+  registry_username: ""       # Generic: the login user (Docker Hub OIDC: the organization)
+  oidc_connection_id: ""      # Docker Hub OIDC connection ID: no stored password
   build_args: ""              # Multi-line KEY=VALUE
   platforms: linux/amd64      # linux/amd64,linux/arm64
 
@@ -429,6 +431,8 @@ Configure Docker image building and registry.
 | `image_tag` | string | Git SHA | Image tag |
 | `registry_type` | string | `"ecr"` | `ecr`, `generic`, or `nexus` |
 | `registry_url` | string | `""` | Registry URL (generic mode) |
+| `registry_username` | string | `""` | Generic-registry user, as plain config (a username passed as a secret is masked, and GitHub then drops any job output containing it, such as an `image_uri` with the username in it). With `oidc_connection_id`: the Docker Hub organization |
+| `oidc_connection_id` | string | `""` | Docker Hub OIDC connection ID (Docker Home → organization → OIDC connections). The login exchanges the workflow's GitHub OIDC token for a Docker token valid for minutes; no `registry_password`. The build logs in this way only when it pushes. The caller needs `id-token: write`. Not a secret |
 | `build_args` | string | `""` | Multi-line build arguments |
 | `platforms` | string | `"linux/amd64"` | Target platforms |
 
@@ -437,7 +441,7 @@ Configure Docker image building and registry.
 | Type | Use Case | Required Fields |
 |------|----------|-----------------|
 | `ecr` | AWS ECR | `aws.role_to_assume` |
-| `generic` | Docker Hub, GHCR | `registry_url`, secrets |
+| `generic` | Docker Hub, GHCR | `registry_url`, and either `registry_username` + `registry_password` (secret) or, for Docker Hub, `registry_username` (the organization) + `oidc_connection_id` |
 | `nexus` | Nexus Docker | `nexus.docker_registry_url` |
 
 **Multi-Architecture Example:**
